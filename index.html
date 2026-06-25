@@ -131,13 +131,15 @@
 <!-- ════════ TAB: CREATE ════════ -->
 <div class="tab-panel active" id="panel-create">
   <div class="card">
-    <h2>New Production Order</h2>
-    <p class="sub">Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.</p>
+    <h2 id="create-title">New Production Order</h2>
+    <p class="sub" id="create-sub">Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.</p>
+    <div id="edit-banner"></div>
 
     <div class="grid2">
       <div class="field">
-        <label>Date</label>
+        <label>Issue Sheet Date</label>
         <input type="date" id="po-date">
+        <div class="hint">Stored in the "Issue Sheet Date" custom field.</div>
       </div>
       <div class="field">
         <label>Reference</label>
@@ -296,6 +298,11 @@ let INVENTORY = [];          // raw inventory-item-batch rows
 let PRODUCTION = [];         // raw production-order-batch rows
 let NAME_MAP   = {};         // inventory key -> display name
 let UNIT_MAP   = {};         // inventory key -> unit of measurement
+let EDIT_KEY   = null;       // key of order being edited (null = create mode)
+let EDIT_ITEM  = null;       // original item being edited (to preserve untouched fields)
+
+// "Issue Sheet Date" custom field — used as the order date instead of the native date
+const ISSUE_DATE_KEY = '019ef39a-2cad-7697-bc07-6d4bc9ce1e36';
 
 const num = v => (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits:4 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -303,6 +310,10 @@ function fmtDate(d) {
   if (!d) return '—';
   const dt = new Date(d);
   return isNaN(dt) ? esc(d) : dt.toLocaleDateString('en-GB', { year:'numeric', month:'short', day:'numeric' });
+}
+/* Order date = Issue Sheet Date custom field, falling back to the native date */
+function orderDate(it) {
+  return it?.customFields2?.dates?.[ISSUE_DATE_KEY] || it?.date || null;
 }
 
 /* ── Budgeted-Qty persistence ──
@@ -502,13 +513,18 @@ function materialOptions(selected) {
   return '<option value="">— Select material —</option>' + inventoryOptionsHtml(selected);
 }
 
-function addBomLine() {
+function addBomLine(opts) {
+  opts = opts || {};
+  const key    = opts.key || '';
+  const budget = Number(opts.budget) || 0;
+  const actual = Number(opts.actualQty) || 0;   // preserved backend qty; 0 for new lines
   const tb = document.getElementById('bom-body');
   const tr = document.createElement('tr');
+  tr.dataset.actualQty = actual;                 // hidden: never driven by budget
   tr.innerHTML = `
-    <td><select class="bom-mat" onchange="updateLineUnit(this)">${materialOptions('')}</select></td>
-    <td class="bom-unit" style="color:#57606a">—</td>
-    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="0" placeholder="0"></td>
+    <td><select class="bom-mat" onchange="updateLineUnit(this)">${materialOptions(key)}</select></td>
+    <td class="bom-unit" style="color:#57606a">${esc(UNIT_MAP[key] || '—')}</td>
+    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${budget}" placeholder="0"></td>
     <td><button class="row-btn" title="Remove" onclick="this.closest('tr').remove()">✕</button></td>`;
   tb.appendChild(tr);
 }
@@ -520,6 +536,7 @@ function updateLineUnit(sel) {
 }
 
 function resetCreateForm() {
+  exitEditMode();
   document.getElementById('po-ref').value = INVENTORY.length ? nextReference() : '';
   document.getElementById('po-desc').value = '';
   document.getElementById('po-finished').value = '';
@@ -534,12 +551,62 @@ function setToday() {
   document.getElementById('po-date').value = new Date().toISOString().slice(0,10);
 }
 
+/* Leave edit mode and restore the create-form chrome */
+function exitEditMode() {
+  EDIT_KEY = null; EDIT_ITEM = null;
+  document.getElementById('create-title').textContent = 'New Production Order';
+  document.getElementById('create-sub').innerHTML = 'Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.';
+  document.getElementById('edit-banner').innerHTML = '';
+  document.getElementById('post-btn').textContent = 'Create Production Order';
+}
+
 /* ══════════════════════════════════
-   CREATE — build payload & POST
-   Mirrors the production-order schema; native
-   fields only. "Budgeted Qty" is an extension
-   planning column (Manager has no native field
-   for it) so it is preserved in the description.
+   EDIT — load an existing order into the form
+══════════════════════════════════ */
+function editOrder(idx) {
+  const row = PRODUCTION[idx];
+  const it  = row?.item || {};
+  EDIT_KEY  = row?.key || it?.key || null;
+  EDIT_ITEM = it;
+
+  switchTab('create');
+  document.getElementById('create-title').textContent = 'Edit Production Order';
+  document.getElementById('create-sub').textContent = 'Update the order below. Existing material quantities are preserved; only the print-only budget is editable per line.';
+  document.getElementById('edit-banner').innerHTML =
+    `<div class="ok-box">Editing order #${esc(it?.reference || it?.text || '')}. Changes will be saved back to Manager. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel edit</button></div>`;
+  document.getElementById('post-btn').textContent = 'Update Production Order';
+
+  // Date from the Issue Sheet Date custom field (fallback native)
+  const d = orderDate(it);
+  document.getElementById('po-date').value = d ? new Date(d).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+
+  document.getElementById('po-ref').value = it?.reference ?? it?.text ?? '';
+  document.getElementById('po-finished').value = it?.finishedInventoryItem || '';
+  document.getElementById('po-qty').value = Number(it?.qty) || 0;
+
+  const { nameMap, map, clean } = parseBudgets(it?.description);
+  document.getElementById('po-desc').value = clean || '';
+
+  // Rebuild BOM rows, preserving each line's actual qty; budget from tag/legacy
+  const body = document.getElementById('bom-body');
+  body.innerHTML = '';
+  const lines = Array.isArray(it?.billOfMaterials) ? it.billOfMaterials : [];
+  if (!lines.length) { addBomLine(); }
+  lines.forEach(l => {
+    const key = l?.billOfMaterials || '';
+    const budget = (Number(map[key]) || 0) || (Number(nameMap[NAME_MAP[key]]) || 0);
+    addBomLine({ key, budget, actualQty: Number(l?.qty) || 0 });
+  });
+
+  document.getElementById('create-msg').innerHTML = '';
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+
+/* ══════════════════════════════════
+   CREATE / UPDATE — build payload & POST or PUT.
+   "Budgeted Qty" is print-only: stored in the description
+   tag, never written as a material's actual line qty.
+   On edit, each line keeps its original backend qty.
 ══════════════════════════════════ */
 function submitProductionOrder() {
   const msg = document.getElementById('create-msg');
@@ -548,21 +615,19 @@ function submitProductionOrder() {
   const finished = document.getElementById('po-finished').value;
   const prodQty  = Number(document.getElementById('po-qty').value) || 0;
 
-  // Collect BOM lines. Budgeted Qty is PRINT-ONLY: it is stored in the
-  // description tag and never written as the material's actual line qty.
+  // Collect BOM lines. Actual qty comes from the row's preserved value (0 for new lines);
+  // the budget is stored only in the description tag.
   const bomLines = [];
   const budgetMap = {};
   document.querySelectorAll('#bom-body tr').forEach(tr => {
     const key = tr.querySelector('.bom-mat')?.value || '';
     const bud = Number(tr.querySelector('.bom-budget')?.value) || 0;
+    const actual = Number(tr.dataset.actualQty) || 0;
     if (key) {
-      bomLines.push({ billOfMaterials: key, qty: 0, obsolete_Qty: null });  // actual qty untouched
+      bomLines.push({ billOfMaterials: key, qty: actual, obsolete_Qty: null });
       if (bud > 0) budgetMap[key] = bud;
     }
   });
-
-  // Native schema requires an expenseItems array; send a single zero placeholder
-  const expItems = [{ account: null, amount: 0, division: null }];
 
   // Validate
   if (!finished) { msg.innerHTML = `<div class="err-box">Please select a finished inventory item.</div>`; return; }
@@ -573,57 +638,71 @@ function submitProductionOrder() {
   const ref = document.getElementById('po-ref').value.trim() || nextReference();
 
   // Description: keep user text clean; append a hidden budgeted-qty tag for round-tripping
-  let desc = document.getElementById('po-desc').value.trim();
+  const desc = document.getElementById('po-desc').value.trim();
   const budTag = encodeBudgets(budgetMap);
   const fullDesc = [desc, budTag].filter(Boolean).join(' ').trim();
 
   const dateVal = document.getElementById('po-date').value;
   const isoDate = dateVal ? new Date(dateVal + 'T00:00:00').toISOString() : new Date().toISOString();
 
-  // Payload — native production-order shape (modelled on the real batch record)
-  const payload = {
-    value: {
-      date: isoDate,
-      reference: ref,
-      inventoryLocation: null,
-      description: fullDesc || null,
-      finishedInventoryItem: finished,
-      qty: prodQty,
-      billOfMaterials: bomLines,
-      addNonInventoryCostIntoProduction: false,
-      expenseItems: expItems,
-      customTheme: false,
-      customThemeId: null,
-      customFields: null,
-      customFields2: { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null },
-      automaticReference: false,
-      obsolete_ExpenseAccount: null,
-      obsolete_Amount: null,
-      obsolete_JournalEntry: null,
-      obsolete_Reference: null,
-      obsolete_Qty: null,
-      transactionTitle: null
-    },
-    business: null
+  // Preserve any existing customFields2 sub-objects, then set the Issue Sheet Date custom field
+  const baseCF2 = (EDIT_ITEM && EDIT_ITEM.customFields2) ? { ...EDIT_ITEM.customFields2 } : { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null };
+  baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: isoDate };
+
+  // Build the order value — start from the original on edit to keep untouched fields intact
+  const base = EDIT_ITEM ? { ...EDIT_ITEM } : {};
+  const value = {
+    ...base,
+    date: isoDate,                       // native date mirrored from Issue Sheet Date
+    reference: ref,
+    inventoryLocation: base.inventoryLocation ?? null,
+    description: fullDesc || null,
+    finishedInventoryItem: finished,
+    qty: prodQty,
+    billOfMaterials: bomLines,
+    addNonInventoryCostIntoProduction: base.addNonInventoryCostIntoProduction ?? false,
+    expenseItems: Array.isArray(base.expenseItems) && base.expenseItems.length ? base.expenseItems : [{ account: null, amount: 0, division: null }],
+    customFields2: baseCF2,
+    automaticReference: false
   };
 
-  const btn = document.getElementById('post-btn');
-  btn.disabled = true; btn.textContent = 'Posting…';
+  const editing = !!EDIT_KEY;
+  const payload = editing
+    ? { key: EDIT_KEY, value, business: null }
+    : { value, business: null };
 
-  postMessageWithResponse({ type:'api-request', method:'POST', path:'/api4/production-order', body: payload })
+  const btn = document.getElementById('post-btn');
+  const verb = editing ? 'Updating…' : 'Posting…';
+  btn.disabled = true; btn.textContent = verb;
+
+  postMessageWithResponse({
+    type: 'api-request',
+    method: editing ? 'PUT' : 'POST',
+    path: '/api4/production-order',
+    body: payload
+  })
     .then(resp => {
-      const newKey = resp?.key || resp?.id || (typeof resp === 'string' ? resp : null);
-      // Reflect the new order locally so the next reference auto-advances without a reload
-      PRODUCTION.push({ key: newKey, item: { ...payload.value, text: payload.value.reference } });
-      msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} created${newKey ? ' (key: ' + esc(newKey) + ')' : ''}.</div>`;
-      btn.textContent = 'Create Production Order'; btn.disabled = false;
-      // Advance reference field to the next number for the following entry
-      document.getElementById('po-ref').value = nextReference();
+      const savedKey = EDIT_KEY || resp?.key || resp?.id || (typeof resp === 'string' ? resp : null);
+      if (editing) {
+        // Update local copy
+        const i = PRODUCTION.findIndex(r => (r?.key || r?.item?.key) === EDIT_KEY);
+        if (i >= 0) PRODUCTION[i] = { ...PRODUCTION[i], item: { ...value, key: EDIT_KEY, text: ref } };
+        msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} updated.</div>`;
+        exitEditMode();
+        btn.textContent = 'Create Production Order'; btn.disabled = false;
+        document.getElementById('po-ref').value = nextReference();
+      } else {
+        PRODUCTION.push({ key: savedKey, item: { ...value, key: savedKey, text: ref } });
+        msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} created${savedKey ? ' (key: ' + esc(savedKey) + ')' : ''}.</div>`;
+        btn.textContent = 'Create Production Order'; btn.disabled = false;
+        document.getElementById('po-ref').value = nextReference();
+      }
       renderPoList();
     })
     .catch(err => {
-      msg.innerHTML = `<div class="err-box">⚠ Could not create order: ${esc(err.message)}</div>`;
-      btn.textContent = 'Create Production Order'; btn.disabled = false;
+      msg.innerHTML = `<div class="err-box">⚠ Could not ${editing ? 'update' : 'create'} order: ${esc(err.message)}</div>`;
+      btn.textContent = editing ? 'Update Production Order' : 'Create Production Order';
+      btn.disabled = false;
     });
 }
 
@@ -669,7 +748,7 @@ function renderPoList() {
         </div>
         <div class="desc">${esc(d.cleanDesc || '—')}</div>
         <div class="meta">
-          <span>${fmtDate(it?.date)}</span>
+          <span>${fmtDate(orderDate(it))}</span>
           <span>Finished: ${esc(NAME_MAP[it?.finishedInventoryItem] || it?.finishedInventoryItem || '—')}</span>
           <span>Materials: ${d.detail.length}</span>
         </div>
@@ -698,13 +777,13 @@ function openOrder(idx) {
         <h1>Production Order</h1>
         <div class="biz">
           <div><strong>Production Order #${esc(ref)}</strong></div>
-          <div>${fmtDate(it?.date)}</div>
+          <div>${fmtDate(orderDate(it))}</div>
         </div>
       </div>
 
       <div class="doc-meta">
         <div><div class="k">Reference</div><div class="v">${esc(ref)}</div></div>
-        <div><div class="k">Date</div><div class="v">${fmtDate(it?.date)}</div></div>
+        <div><div class="k">Issue Sheet Date</div><div class="v">${fmtDate(orderDate(it))}</div></div>
         <div><div class="k">Finished Item</div><div class="v">${esc(finishedName)}</div></div>
         <div><div class="k">Finished Qty</div><div class="v">${num(it?.qty)}</div></div>
         <div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc || '—')}</div></div>
@@ -727,6 +806,7 @@ function openOrder(idx) {
         <h2 style="margin:0">Order #${esc(ref)} — customised view</h2>
         <div style="display:flex;gap:10px">
           <button class="btn-primary" onclick="printOrder()">🖨 Print / Save as PDF</button>
+          <button class="btn-secondary" onclick="editOrder(${idx})">✎ Edit</button>
           <button class="btn-secondary" onclick="document.getElementById('po-detail').innerHTML=''">Close</button>
         </div>
       </div>
