@@ -532,14 +532,15 @@ function submitProductionOrder() {
   const finished = document.getElementById('po-finished').value;
   const prodQty  = Number(document.getElementById('po-qty').value) || 0;
 
-  // Collect BOM lines; budgeted qty is the only quantity entered, used as the line qty
+  // Collect BOM lines. Budgeted Qty is PRINT-ONLY: it is stored in the
+  // description tag and never written as the material's actual line qty.
   const bomLines = [];
   const budgetMap = {};
   document.querySelectorAll('#bom-body tr').forEach(tr => {
     const key = tr.querySelector('.bom-mat')?.value || '';
     const bud = Number(tr.querySelector('.bom-budget')?.value) || 0;
     if (key) {
-      bomLines.push({ billOfMaterials: key, qty: bud, obsolete_Qty: null });
+      bomLines.push({ billOfMaterials: key, qty: 0, obsolete_Qty: null });  // actual qty untouched
       if (bud > 0) budgetMap[key] = bud;
     }
   });
@@ -612,16 +613,16 @@ function submitProductionOrder() {
 
 /* ══════════════════════════════════
    FETCH — build the material detail for an order.
-   Budgeted Qty comes from the stored tag if present,
-   otherwise falls back to the native line qty.
+   Budgeted Qty is PRINT-ONLY metadata read from the
+   stored description tag; it is independent of the
+   material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
   const { map: budgetMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map(l => {
     const key = l?.billOfMaterials;
-    const tagged = Number(budgetMap[key]);
-    const budget = (tagged > 0) ? tagged : (Number(l?.qty) || 0);
+    const budget = Number(budgetMap[key]) || 0;   // tag only — never the backend qty
     return {
       name: NAME_MAP[key] || key || '—',
       unit: UNIT_MAP[key] || '—',
@@ -670,7 +671,7 @@ function openOrder(idx) {
     <tr>
       <td>${esc(m.name)}</td>
       <td>${esc(m.unit)}</td>
-      <td class="num">${num(m.budget)}</td>
+      <td class="num">${m.budget > 0 ? num(m.budget) : '—'}</td>
     </tr>`).join('') || `<tr><td colspan="3" style="text-align:center;color:#888">No material lines</td></tr>`;
 
   const docHtml = `
