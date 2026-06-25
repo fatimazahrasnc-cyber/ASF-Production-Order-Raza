@@ -306,26 +306,42 @@ function fmtDate(d) {
 }
 
 /* ── Budgeted-Qty persistence ──
-   Manager has no native budgeted-qty field, so we
-   stash a machine-readable tag at the end of the
-   description on create, then parse it back out into
-   its own column on fetch/print and hide the tag from
-   the visible description. */
-const BUD_RE = /\u27E6BUD:([^\u27E7]*)\u27E7/;   // ⟦BUD:key=qty|key=qty⟧
+   Manager has no native budgeted-qty field, so on create we
+   stash a machine-readable tag at the end of the description,
+   then parse it back into its own column on fetch/print and
+   hide it from the visible description. We also understand the
+   older human-readable "| Budgeted: Name: budget N; …" format. */
+const BUD_RE    = /\u27E6BUD:([^\u27E7]*)\u27E7/;            // ⟦BUD:key=qty|key=qty⟧
+const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name: budget N; …
 function encodeBudgets(map) {
   const parts = Object.entries(map).filter(([k,v]) => k && Number(v) > 0).map(([k,v]) => `${k}=${v}`);
   return parts.length ? `\u27E6BUD:${parts.join('|')}\u27E7` : '';
 }
 function parseBudgets(description) {
-  const out = { map:{}, clean:(description || '').toString() };
+  const out = { map:{}, nameMap:{}, clean:(description || '').toString() };
+
+  // Current format: ⟦BUD:uuid=qty|…⟧ (keyed by material UUID)
   const m = out.clean.match(BUD_RE);
   if (m) {
     m[1].split('|').forEach(pair => {
       const [k, v] = pair.split('=');
       if (k) out.map[k] = Number(v) || 0;
     });
-    out.clean = out.clean.replace(BUD_RE, '').replace(/\s*\|\s*$/,'').trim();
+    out.clean = out.clean.replace(BUD_RE, '').trim();
   }
+
+  // Legacy format: "Budgeted: Name: budget N; Name2: budget M" (keyed by item name)
+  const lm = out.clean.match(LEGACY_RE);
+  if (lm) {
+    lm[1].split(';').forEach(seg => {
+      const mm = seg.trim().match(/^(.*?):\s*budget\s*([\d.]+)$/i);
+      if (mm) out.nameMap[mm[1].trim()] = Number(mm[2]) || 0;
+    });
+    out.clean = out.clean.replace(LEGACY_RE, '').trim();
+  }
+
+  // Tidy any leftover separators
+  out.clean = out.clean.replace(/\s*\|\s*$/,'').replace(/^\s*\|\s*/,'').trim();
   return out;
 }
 
@@ -618,13 +634,15 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { map: budgetMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { map: budgetMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map(l => {
-    const key = l?.billOfMaterials;
-    const budget = Number(budgetMap[key]) || 0;   // tag only — never the backend qty
+    const key  = l?.billOfMaterials;
+    const name = NAME_MAP[key] || key || '—';
+    // Print-only budget: UUID tag first, then legacy name match. Never the backend line qty.
+    const budget = (Number(budgetMap[key]) || 0) || (Number(nameMap[name]) || 0);
     return {
-      name: NAME_MAP[key] || key || '—',
+      name,
       unit: UNIT_MAP[key] || '—',
       budget
     };
