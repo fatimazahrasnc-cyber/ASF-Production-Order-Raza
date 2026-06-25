@@ -51,7 +51,7 @@
 
   /* ── Line-item table ── */
   table.lines { width:100%; border-collapse:collapse; margin-top:6px; font-size:13px; }
-  table.lines th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#57606a; padding:8px 8px; border-bottom:1px solid #e6eaef; }
+  table.lines th { text-align:left; font-size:11px; text-transform:none; letter-spacing:0; color:#57606a; padding:8px 8px; border-bottom:1px solid #e6eaef; }
   table.lines td { padding:6px 8px; border-bottom:1px solid #f0f2f5; vertical-align:middle; }
   table.lines td input, table.lines td select { width:100%; padding:6px 8px; font-size:13px; border:1px solid #d0d7de; border-radius:6px; }
   .num { text-align:right; font-variant-numeric:tabular-nums; }
@@ -103,7 +103,7 @@
   .doc-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#777; }
   .doc-meta .v { font-size:14px; font-weight:600; }
   table.doc-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:18px; table-layout:fixed; }
-  table.doc-tbl th { background:#f3f5f7; text-align:left; padding:7px 6px; font-size:10px; text-transform:uppercase; letter-spacing:.02em; border:1px solid #ccc; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:bottom; }
+  table.doc-tbl th { background:#f3f5f7; text-align:left; padding:7px 6px; font-size:11px; font-weight:700; text-transform:none; letter-spacing:0; border:1px solid #ccc; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:bottom; }
   table.doc-tbl td { padding:7px 6px; border:1px solid #ddd; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:top; height:30px; }
   table.doc-tbl tfoot td { font-weight:700; border-top:2px solid #ccc; }
   .perunit-box { display:flex; justify-content:flex-end; }
@@ -867,11 +867,11 @@ function openOrder(idx) {
   const rowsHtml = d.detail.map(m => `
     <tr>
       <td>${esc(m.name)}</td>
+      <td></td>
       <td>${esc(m.unit)}</td>
+      <td></td>
       <td class="num">${m.budget > 0 ? num(m.budget) : ''}</td>
       <td class="num">${m.actualIssue > 0 ? num(m.actualIssue) : ''}</td>
-      <td></td>
-      <td></td>
       <td></td>
     </tr>`).join('') || `<tr><td colspan="7" style="text-align:center;color:#888">No material lines</td></tr>`;
 
@@ -896,12 +896,12 @@ function openOrder(idx) {
       <table class="doc-tbl">
         <thead>
           <tr>
-            <th style="width:21%">Raw Material</th>
+            <th style="width:15%">Raw Material</th>
+            <th style="width:15%">Description</th>
             <th style="width:8%">Unit</th>
-            <th class="num" style="width:9%">Required</th>
-            <th class="num" style="width:9%">Issued</th>
-            <th style="width:22%">Components description</th>
-            <th style="width:13%">Consumption</th>
+            <th style="width:12%">Composition</th>
+            <th class="num" style="width:10%">Required</th>
+            <th class="num" style="width:22%">Issued</th>
             <th style="width:18%">Remarks</th>
           </tr>
         </thead>
