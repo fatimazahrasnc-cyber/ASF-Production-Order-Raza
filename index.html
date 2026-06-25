@@ -71,6 +71,16 @@
 
   .hint { font-size:11px; color:#8a929b; margin-top:4px; }
 
+  /* ── Searchable combobox ── */
+  .combo { position:relative; }
+  .combo-input { width:100%; padding:8px 10px; font-size:13px; border:1px solid #d0d7de; border-radius:7px; background:#fff; color:#24292f; font-family:inherit; }
+  .combo-input:focus { outline:none; border-color:#0969da; box-shadow:0 0 0 3px rgba(9,105,218,.12); }
+  table.lines .combo-input { padding:6px 8px; }
+  .combo-list { position:absolute; z-index:60; left:0; right:0; top:calc(100% + 3px); max-height:240px; overflow:auto; background:#fff; border:1px solid #d0d7de; border-radius:8px; box-shadow:0 8px 24px rgba(27,31,36,.14); display:none; }
+  .combo-opt { padding:7px 10px; font-size:13px; cursor:pointer; }
+  .combo-opt:hover, .combo-opt.active { background:#ddf4ff; }
+  .combo-empty { padding:8px 10px; font-size:12px; color:#8a929b; }
+
   /* ── Fetch list / detail ── */
   .po-list { display:grid; gap:10px; }
   .po-card { border:1px solid #d0d7de; border-radius:10px; padding:14px 16px; cursor:pointer; transition:border-color .15s,box-shadow .15s; }
@@ -152,7 +162,11 @@
       </div>
       <div class="field">
         <label>Finished Inventory Item</label>
-        <select id="po-finished"><option value="">— Load records first —</option></select>
+        <div class="combo" id="po-finished" data-value="">
+          <input type="text" class="combo-input" autocomplete="off" placeholder="Load records first"
+                 onfocus="comboOpen(this)" oninput="comboFilter(this)" onkeydown="comboKey(event,this)" onblur="comboBlur(this)">
+          <div class="combo-list"></div>
+        </div>
       </div>
       <div class="field">
         <label>Finished Qty Produced</label>
@@ -164,9 +178,10 @@
     <table class="lines" id="bom-table">
       <thead>
         <tr>
-          <th style="width:54%">Raw Material</th>
-          <th style="width:18%">Unit</th>
-          <th style="width:24%" class="num">Budgeted Qty</th>
+          <th style="width:40%">Raw Material</th>
+          <th style="width:14%">Unit</th>
+          <th style="width:20%" class="num">Budgeted Qty</th>
+          <th style="width:22%" class="num">Actual Qty Issue</th>
           <th style="width:4%"></th>
         </tr>
       </thead>
@@ -316,30 +331,39 @@ function orderDate(it) {
   return it?.customFields2?.dates?.[ISSUE_DATE_KEY] || it?.date || null;
 }
 
-/* ── Budgeted-Qty persistence ──
-   Manager has no native budgeted-qty field, so on create we
-   stash a machine-readable tag at the end of the description,
-   then parse it back into its own column on fetch/print and
-   hide it from the visible description. We also understand the
-   older human-readable "| Budgeted: Name: budget N; …" format. */
+/* ── Print-only quantity persistence ──
+   Manager has no native budgeted-qty or actual-issue field, so on
+   create/update we stash machine-readable tags at the end of the
+   description (⟦BUD:…⟧ for Budgeted Qty, ⟦AQI:…⟧ for Actual Qty Issue),
+   parse them back into their own columns on fetch/print, and hide them
+   from the visible description. We also read the older human-readable
+   "| Budgeted: Name: budget N; …" format. */
 const BUD_RE    = /\u27E6BUD:([^\u27E7]*)\u27E7/;            // ⟦BUD:key=qty|key=qty⟧
+const AQI_RE    = /\u27E6AQI:([^\u27E7]*)\u27E7/;            // ⟦AQI:key=qty|key=qty⟧
 const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name: budget N; …
-function encodeBudgets(map) {
+function encodeTag(prefix, map) {
   const parts = Object.entries(map).filter(([k,v]) => k && Number(v) > 0).map(([k,v]) => `${k}=${v}`);
-  return parts.length ? `\u27E6BUD:${parts.join('|')}\u27E7` : '';
+  return parts.length ? `\u27E6${prefix}:${parts.join('|')}\u27E7` : '';
 }
-function parseBudgets(description) {
-  const out = { map:{}, nameMap:{}, clean:(description || '').toString() };
-
-  // Current format: ⟦BUD:uuid=qty|…⟧ (keyed by material UUID)
-  const m = out.clean.match(BUD_RE);
+function encodeBudgets(map) { return encodeTag('BUD', map); }
+function encodeActuals(map) { return encodeTag('AQI', map); }
+function parseTagInto(re, clean, target) {
+  const m = clean.match(re);
   if (m) {
     m[1].split('|').forEach(pair => {
       const [k, v] = pair.split('=');
-      if (k) out.map[k] = Number(v) || 0;
+      if (k) target[k] = Number(v) || 0;
     });
-    out.clean = out.clean.replace(BUD_RE, '').trim();
+    clean = clean.replace(re, '').trim();
   }
+  return clean;
+}
+function parseBudgets(description) {
+  const out = { map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
+
+  // Current formats: ⟦BUD:uuid=qty|…⟧ and ⟦AQI:uuid=qty|…⟧ (keyed by material UUID)
+  out.clean = parseTagInto(BUD_RE, out.clean, out.map);
+  out.clean = parseTagInto(AQI_RE, out.clean, out.actualMap);
 
   // Legacy format: "Budgeted: Name: budget N; Name2: budget M" (keyed by item name)
   const lm = out.clean.match(LEGACY_RE);
@@ -438,16 +462,18 @@ function render() {
     app.innerHTML = `<div class="ok-box">Loaded ${INVENTORY.length} inventory items and ${PRODUCTION.length} production orders. You can now create or fetch orders.</div>`;
   }
 
-  // Populate finished-item dropdown with ALL inventory items
-  const sel = document.getElementById('po-finished');
-  const prevFinished = sel.value;
-  sel.innerHTML = '<option value="">— Select finished item —</option>' + inventoryOptionsHtml(prevFinished);
+  // Resolve the finished-item combo label from its stored value
+  const fin = document.getElementById('po-finished');
+  const finInput = fin.querySelector('.combo-input');
+  finInput.placeholder = 'Search finished item…';
+  finInput.value = fin.dataset.value ? (NAME_MAP[fin.dataset.value] || fin.dataset.value) : '';
 
-  // Refresh any material-line dropdowns that already exist, keeping their selection
-  document.querySelectorAll('#bom-body .bom-mat').forEach(s => {
-    const keep = s.value;
-    s.innerHTML = materialOptions(keep);
-    updateLineUnit(s);
+  // Refresh any existing material-line combos (resolve labels + units)
+  document.querySelectorAll('#bom-body .bom-mat-combo').forEach(combo => {
+    const input = combo.querySelector('.combo-input');
+    input.placeholder = 'Search material…';
+    input.value = combo.dataset.value ? (NAME_MAP[combo.dataset.value] || combo.dataset.value) : '';
+    comboOnPick(combo);
   });
 
   // Enable create button + seed one BOM line if empty
@@ -459,6 +485,80 @@ function render() {
   if (!refEl.value.trim()) refEl.value = nextReference();
 
   renderPoList();
+}
+
+/* ══════════════════════════════════
+   Searchable combobox engine (self-contained).
+   Each combo is <div class="combo" data-value="KEY">
+   with a .combo-input and a .combo-list. Options are
+   built live from INVENTORY so search always reflects
+   the full, current list.
+══════════════════════════════════ */
+function comboOptionList(filter) {
+  const f = (filter || '').trim().toLowerCase();
+  return sortedInventory().map(invFields).filter(o => o.key && (!f || o.label.toLowerCase().includes(f)));
+}
+function comboRenderList(combo, filter) {
+  const list = combo.querySelector('.combo-list');
+  const opts = comboOptionList(filter);
+  list.innerHTML = opts.length
+    ? opts.map(o => `<div class="combo-opt" data-key="${esc(o.key)}">${esc(o.label)}${o.inactive ? ' (inactive)' : ''}</div>`).join('')
+    : `<div class="combo-empty">No matching items</div>`;
+  list.style.display = 'block';
+}
+function comboOpen(input) {
+  if (!INVENTORY.length) return;
+  comboRenderList(input.closest('.combo'), '');
+}
+function comboFilter(input) {
+  const combo = input.closest('.combo');
+  combo.dataset.value = '';            // typing invalidates the selection until re-picked
+  comboRenderList(combo, input.value);
+}
+function comboKey(e, input) {
+  const combo = input.closest('.combo');
+  const list = combo.querySelector('.combo-list');
+  if (list.style.display !== 'block' && (e.key === 'ArrowDown')) { comboOpen(input); return; }
+  const opts = Array.from(list.querySelectorAll('.combo-opt'));
+  if (!opts.length) return;
+  let i = opts.findIndex(o => o.classList.contains('active'));
+  if (e.key === 'ArrowDown') { e.preventDefault(); i = Math.min(opts.length - 1, i + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); i = Math.max(0, i - 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (i >= 0) comboPick(combo, opts[i].dataset.key); return; }
+  else if (e.key === 'Escape') { list.style.display = 'none'; return; }
+  else return;
+  opts.forEach(o => o.classList.remove('active'));
+  if (opts[i]) { opts[i].classList.add('active'); opts[i].scrollIntoView({ block:'nearest' }); }
+}
+function comboBlur(input) {
+  const combo = input.closest('.combo');
+  setTimeout(() => {
+    combo.querySelector('.combo-list').style.display = 'none';
+    // Reconcile typed text: exact label match selects it; otherwise revert to current value's label
+    const typed = input.value.trim().toLowerCase();
+    const match = comboOptionList('').find(o => o.label.toLowerCase() === typed);
+    if (match) comboPick(combo, match.key, true);
+    else input.value = combo.dataset.value ? (NAME_MAP[combo.dataset.value] || combo.dataset.value) : '';
+  }, 150);
+}
+function comboPick(combo, key, silent) {
+  combo.dataset.value = key;
+  combo.querySelector('.combo-input').value = NAME_MAP[key] || key;
+  combo.querySelector('.combo-list').style.display = 'none';
+  comboOnPick(combo);
+}
+/* Side-effects after a pick: keep a material row's Unit cell in sync */
+function comboOnPick(combo) {
+  if (combo.classList.contains('bom-mat-combo')) {
+    const cell = combo.closest('tr')?.querySelector('.bom-unit');
+    if (cell) cell.textContent = UNIT_MAP[combo.dataset.value] || '—';
+  }
+}
+function comboValue(combo) { return combo?.dataset?.value || ''; }
+function comboSetValue(combo, key) {
+  combo.dataset.value = key || '';
+  combo.querySelector('.combo-input').value = key ? (NAME_MAP[key] || key) : '';
+  comboOnPick(combo);
 }
 
 /* ══════════════════════════════════
@@ -484,16 +584,6 @@ function sortedInventory() {
   });
 }
 
-/* <option> list for ALL inventory items; marks the given key selected. */
-function inventoryOptionsHtml(selected) {
-  return sortedInventory().map(row => {
-    const { key, label, inactive } = invFields(row);
-    if (!key) return '';
-    const sel = key === selected ? ' selected' : '';
-    return `<option value="${esc(key)}"${sel}>${esc(label)}${inactive ? ' (inactive)' : ''}</option>`;
-  }).join('');
-}
-
 /* ══════════════════════════════════
    Tab switching
 ══════════════════════════════════ */
@@ -505,34 +595,34 @@ function switchTab(name) {
 }
 
 /* ══════════════════════════════════
-   CREATE — Bill of Materials lines
-   Each line carries the extra "Budgeted Qty" column.
+   CREATE — Bill of Materials lines.
+   Each row: searchable material combo, Unit, Budgeted Qty,
+   Actual Qty Issue (both print-only), plus a preserved
+   backend actual-qty kept in the row dataset.
 ══════════════════════════════════ */
-function materialOptions(selected) {
-  if (!INVENTORY.length) return '<option value="">— Load records first —</option>';
-  return '<option value="">— Select material —</option>' + inventoryOptionsHtml(selected);
-}
-
 function addBomLine(opts) {
   opts = opts || {};
   const key    = opts.key || '';
   const budget = Number(opts.budget) || 0;
+  const issue  = Number(opts.actualIssue) || 0;
   const actual = Number(opts.actualQty) || 0;   // preserved backend qty; 0 for new lines
   const tb = document.getElementById('bom-body');
   const tr = document.createElement('tr');
-  tr.dataset.actualQty = actual;                 // hidden: never driven by budget
+  tr.dataset.actualQty = actual;                 // hidden: never driven by budget/issue
+  const label = key ? (NAME_MAP[key] || key) : '';
   tr.innerHTML = `
-    <td><select class="bom-mat" onchange="updateLineUnit(this)">${materialOptions(key)}</select></td>
+    <td>
+      <div class="combo bom-mat-combo" data-value="${esc(key)}">
+        <input type="text" class="combo-input" autocomplete="off" placeholder="Search material…" value="${esc(label)}"
+               onfocus="comboOpen(this)" oninput="comboFilter(this)" onkeydown="comboKey(event,this)" onblur="comboBlur(this)">
+        <div class="combo-list"></div>
+      </div>
+    </td>
     <td class="bom-unit" style="color:#57606a">${esc(UNIT_MAP[key] || '—')}</td>
     <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${budget}" placeholder="0"></td>
+    <td class="num"><input type="number" class="bom-issue num" min="0" step="any" value="${issue}" placeholder="0"></td>
     <td><button class="row-btn" title="Remove" onclick="this.closest('tr').remove()">✕</button></td>`;
   tb.appendChild(tr);
-}
-
-/* Fill the Unit cell from the selected material's unit of measurement */
-function updateLineUnit(sel) {
-  const cell = sel.closest('tr')?.querySelector('.bom-unit');
-  if (cell) cell.textContent = UNIT_MAP[sel.value] || '—';
 }
 
 function resetCreateForm() {
@@ -571,7 +661,7 @@ function editOrder(idx) {
 
   switchTab('create');
   document.getElementById('create-title').textContent = 'Edit Production Order';
-  document.getElementById('create-sub').textContent = 'Update the order below. Existing material quantities are preserved; only the print-only budget is editable per line.';
+  document.getElementById('create-sub').textContent = 'Update the order below. Existing material quantities are preserved; the print-only Budgeted Qty and Actual Qty Issue are editable per line.';
   document.getElementById('edit-banner').innerHTML =
     `<div class="ok-box">Editing order #${esc(it?.reference || it?.text || '')}. Changes will be saved back to Manager. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel edit</button></div>`;
   document.getElementById('post-btn').textContent = 'Update Production Order';
@@ -581,13 +671,13 @@ function editOrder(idx) {
   document.getElementById('po-date').value = d ? new Date(d).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
 
   document.getElementById('po-ref').value = it?.reference ?? it?.text ?? '';
-  document.getElementById('po-finished').value = it?.finishedInventoryItem || '';
+  comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
   document.getElementById('po-qty').value = Number(it?.qty) || 0;
 
-  const { nameMap, map, clean } = parseBudgets(it?.description);
+  const { nameMap, map, actualMap, clean } = parseBudgets(it?.description);
   document.getElementById('po-desc').value = clean || '';
 
-  // Rebuild BOM rows, preserving each line's actual qty; budget from tag/legacy
+  // Rebuild BOM rows, preserving each line's actual backend qty; print-only fields from tags
   const body = document.getElementById('bom-body');
   body.innerHTML = '';
   const lines = Array.isArray(it?.billOfMaterials) ? it.billOfMaterials : [];
@@ -595,7 +685,8 @@ function editOrder(idx) {
   lines.forEach(l => {
     const key = l?.billOfMaterials || '';
     const budget = (Number(map[key]) || 0) || (Number(nameMap[NAME_MAP[key]]) || 0);
-    addBomLine({ key, budget, actualQty: Number(l?.qty) || 0 });
+    const actualIssue = Number(actualMap[key]) || 0;
+    addBomLine({ key, budget, actualIssue, actualQty: Number(l?.qty) || 0 });
   });
 
   document.getElementById('create-msg').innerHTML = '';
@@ -612,20 +703,24 @@ function submitProductionOrder() {
   const msg = document.getElementById('create-msg');
   msg.innerHTML = '';
 
-  const finished = document.getElementById('po-finished').value;
+  const finished = comboValue(document.getElementById('po-finished'));
   const prodQty  = Number(document.getElementById('po-qty').value) || 0;
 
-  // Collect BOM lines. Actual qty comes from the row's preserved value (0 for new lines);
-  // the budget is stored only in the description tag.
+  // Collect BOM lines. Actual backend qty comes from the row's preserved value
+  // (0 for new lines). Budgeted Qty and Actual Qty Issue are print-only and
+  // stored only in description tags — they never become the line qty.
   const bomLines = [];
   const budgetMap = {};
+  const actualMap = {};
   document.querySelectorAll('#bom-body tr').forEach(tr => {
-    const key = tr.querySelector('.bom-mat')?.value || '';
+    const key = comboValue(tr.querySelector('.bom-mat-combo'));
     const bud = Number(tr.querySelector('.bom-budget')?.value) || 0;
+    const iss = Number(tr.querySelector('.bom-issue')?.value) || 0;
     const actual = Number(tr.dataset.actualQty) || 0;
     if (key) {
       bomLines.push({ billOfMaterials: key, qty: actual, obsolete_Qty: null });
       if (bud > 0) budgetMap[key] = bud;
+      if (iss > 0) actualMap[key] = iss;
     }
   });
 
@@ -637,10 +732,11 @@ function submitProductionOrder() {
   // Reference: use field value, else auto = highest existing + 1
   const ref = document.getElementById('po-ref').value.trim() || nextReference();
 
-  // Description: keep user text clean; append a hidden budgeted-qty tag for round-tripping
+  // Description: keep user text clean; append hidden print-only tags for round-tripping
   const desc = document.getElementById('po-desc').value.trim();
   const budTag = encodeBudgets(budgetMap);
-  const fullDesc = [desc, budTag].filter(Boolean).join(' ').trim();
+  const aqiTag = encodeActuals(actualMap);
+  const fullDesc = [desc, budTag, aqiTag].filter(Boolean).join(' ').trim();
 
   const dateVal = document.getElementById('po-date').value;
   const isoDate = dateVal ? new Date(dateVal + 'T00:00:00').toISOString() : new Date().toISOString();
@@ -713,17 +809,19 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { map: budgetMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map(l => {
     const key  = l?.billOfMaterials;
     const name = NAME_MAP[key] || key || '—';
-    // Print-only budget: UUID tag first, then legacy name match. Never the backend line qty.
+    // Print-only values: UUID tag first, then legacy name match. Never the backend line qty.
     const budget = (Number(budgetMap[key]) || 0) || (Number(nameMap[name]) || 0);
+    const actualIssue = Number(actualMap[key]) || 0;
     return {
       name,
       unit: UNIT_MAP[key] || '—',
-      budget
+      budget,
+      actualIssue
     };
   });
   return { detail, cleanDesc };
@@ -769,7 +867,8 @@ function openOrder(idx) {
       <td>${esc(m.name)}</td>
       <td>${esc(m.unit)}</td>
       <td class="num">${m.budget > 0 ? num(m.budget) : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="3" style="text-align:center;color:#888">No material lines</td></tr>`;
+      <td class="num">${m.actualIssue > 0 ? num(m.actualIssue) : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:#888">No material lines</td></tr>`;
 
   const docHtml = `
     <div class="doc">
@@ -791,7 +890,7 @@ function openOrder(idx) {
 
       <table class="doc-tbl">
         <thead>
-          <tr><th>Raw Material</th><th>Unit of Measurement</th><th class="num">Budgeted Qty</th></tr>
+          <tr><th>Raw Material</th><th>Unit of Measurement</th><th class="num">Budgeted Qty</th><th class="num">Actual Qty Issue</th></tr>
         </thead>
         <tbody>
           ${rowsHtml}
@@ -818,6 +917,20 @@ function openOrder(idx) {
 
 /* Trigger browser print dialog → user picks "Save as PDF" */
 function printOrder() { window.print(); }
+
+/* Global combobox handling: option pick (mousedown beats blur) + click-away close */
+document.addEventListener('mousedown', e => {
+  const opt = e.target.closest('.combo-opt');
+  if (opt) {
+    e.preventDefault();                       // keep focus so blur reconcile doesn't fight us
+    const combo = opt.closest('.combo');
+    comboPick(combo, opt.dataset.key);
+    return;
+  }
+  if (!e.target.closest('.combo')) {
+    document.querySelectorAll('.combo-list').forEach(l => l.style.display = 'none');
+  }
+});
 
 /* Initialise */
 setToday();
