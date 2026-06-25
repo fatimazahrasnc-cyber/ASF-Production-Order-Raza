@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Production Order — Create & Fetch (Manager.io Extension)</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:#ffffff; color:#24292f; min-height:100vh; padding:20px; }
+
+  /* ── Control bar (from skeleton) ── */
+  .ctrl-bar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:12px 16px; margin-bottom:18px;
+    background:#f6f8fa; border:1px solid #d0d7de; border-radius:10px;
+  }
+  .load-btn {
+    padding:8px 20px; border:none; border-radius:7px; cursor:pointer;
+    font-size:13px; font-weight:700; background:#0969da; color:#fff; transition:opacity .15s;
+  }
+  .load-btn:disabled { opacity:.45; cursor:not-allowed; }
+  .prog-wrap { flex:1; min-width:100px; height:5px; background:#d0d7de; border-radius:3px; overflow:hidden; }
+  .prog-bar  { height:100%; width:0%; background:#0969da; border-radius:3px; transition:width .25s; }
+  .status-txt { font-size:12px; color:#57606a; white-space:nowrap; }
+  .err-box { color:#cf222e; background:#fff5f5; border:1px solid #ffcfcf; border-radius:8px; padding:12px 16px; font-size:13px; margin-bottom:16px; }
+  .ok-box  { color:#1a7f37; background:#f0fff4; border:1px solid #b6f0c4; border-radius:8px; padding:12px 16px; font-size:13px; margin-bottom:16px; }
+
+  /* ── Tabs ── */
+  .tabs { display:flex; gap:6px; margin-bottom:18px; border-bottom:2px solid #e6eaef; }
+  .tab-btn {
+    padding:10px 18px; border:none; background:none; cursor:pointer;
+    font-size:14px; font-weight:600; color:#57606a; border-bottom:3px solid transparent;
+    margin-bottom:-2px; transition:color .15s,border-color .15s;
+  }
+  .tab-btn.active { color:#0969da; border-bottom-color:#0969da; }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+
+  /* ── Cards / layout ── */
+  .card { background:#fff; border:1px solid #d0d7de; border-radius:12px; padding:20px; margin-bottom:18px; }
+  .card h2 { font-size:16px; margin-bottom:4px; }
+  .card .sub { font-size:12px; color:#57606a; margin-bottom:16px; }
+
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+  .field label { display:block; font-size:12px; font-weight:600; color:#57606a; margin-bottom:5px; }
+  .field input, .field select, .field textarea {
+    width:100%; padding:8px 10px; font-size:13px; border:1px solid #d0d7de;
+    border-radius:7px; background:#fff; color:#24292f; font-family:inherit;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { outline:none; border-color:#0969da; box-shadow:0 0 0 3px rgba(9,105,218,.12); }
+
+  /* ── Line-item table ── */
+  table.lines { width:100%; border-collapse:collapse; margin-top:6px; font-size:13px; }
+  table.lines th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#57606a; padding:8px 8px; border-bottom:1px solid #e6eaef; }
+  table.lines td { padding:6px 8px; border-bottom:1px solid #f0f2f5; vertical-align:middle; }
+  table.lines td input, table.lines td select { width:100%; padding:6px 8px; font-size:13px; border:1px solid #d0d7de; border-radius:6px; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .row-btn { background:none; border:none; color:#cf222e; cursor:pointer; font-size:16px; line-height:1; }
+  .add-line { margin-top:10px; padding:7px 14px; font-size:12px; font-weight:600; background:#f6f8fa; border:1px solid #d0d7de; border-radius:7px; cursor:pointer; }
+
+  .summary-strip { display:flex; gap:24px; flex-wrap:wrap; margin-top:16px; padding-top:16px; border-top:1px dashed #d0d7de; }
+  .stat { }
+  .stat .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#57606a; }
+  .stat .v { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .stat .v.accent { color:#0969da; }
+
+  .actions { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+  .btn-primary { padding:10px 22px; border:none; border-radius:8px; background:#0969da; color:#fff; font-weight:700; font-size:14px; cursor:pointer; }
+  .btn-primary:disabled { opacity:.45; cursor:not-allowed; }
+  .btn-secondary { padding:10px 18px; border:1px solid #d0d7de; border-radius:8px; background:#fff; color:#24292f; font-weight:600; font-size:14px; cursor:pointer; }
+
+  .hint { font-size:11px; color:#8a929b; margin-top:4px; }
+
+  /* ── Fetch list / detail ── */
+  .po-list { display:grid; gap:10px; }
+  .po-card { border:1px solid #d0d7de; border-radius:10px; padding:14px 16px; cursor:pointer; transition:border-color .15s,box-shadow .15s; }
+  .po-card:hover { border-color:#0969da; box-shadow:0 2px 8px rgba(9,105,218,.08); }
+  .po-card .row { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+  .po-card .ref { font-weight:700; font-size:15px; }
+  .po-card .desc { font-size:13px; color:#57606a; }
+  .po-card .meta { font-size:12px; color:#8a929b; margin-top:4px; display:flex; gap:16px; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700; }
+  .pill.cost { background:#ddf4ff; color:#0969da; }
+  .empty { text-align:center; color:#8a929b; padding:40px 20px; font-size:14px; }
+
+  /* ── Printable document ── */
+  #print-doc { display:none; }
+  .doc { background:#fff; color:#111; padding:28px; border:1px solid #e6eaef; border-radius:12px; margin-top:16px; }
+  .doc-head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #111; padding-bottom:14px; margin-bottom:18px; }
+  .doc-head h1 { font-size:22px; letter-spacing:.02em; }
+  .doc-head .biz { text-align:right; font-size:12px; color:#444; }
+  .doc-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .doc-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#777; }
+  .doc-meta .v { font-size:14px; font-weight:600; }
+  table.doc-tbl { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:18px; }
+  table.doc-tbl th { background:#f3f5f7; text-align:left; padding:9px 10px; font-size:11px; text-transform:uppercase; letter-spacing:.03em; border-bottom:2px solid #ccc; }
+  table.doc-tbl td { padding:8px 10px; border-bottom:1px solid #eee; }
+  table.doc-tbl tfoot td { font-weight:700; border-top:2px solid #ccc; border-bottom:none; }
+  .perunit-box { display:flex; justify-content:flex-end; }
+  .perunit-card { border:2px solid #0969da; border-radius:10px; padding:12px 20px; text-align:right; }
+  .perunit-card .k { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#0969da; }
+  .perunit-card .v { font-size:26px; font-weight:800; color:#0969da; font-variant-numeric:tabular-nums; }
+  .perunit-card .f { font-size:10px; color:#888; margin-top:3px; }
+
+  @media print {
+    body * { visibility:hidden; }
+    #print-doc, #print-doc * { visibility:visible; }
+    #print-doc { display:block !important; position:absolute; left:0; top:0; width:100%; padding:0; }
+    .doc { border:none; border-radius:0; margin:0; padding:10px; }
+    @page { margin:16mm; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Control bar wired to the mandated loader -->
+<div class="ctrl-bar">
+  <button class="load-btn" id="load-btn" onclick="loadAllRecords()">⬇ Load All Records</button>
+  <div class="prog-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+  <span class="status-txt" id="status-txt">Press Load to fetch inventory items &amp; production orders from Manager</span>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tab-create-btn" onclick="switchTab('create')">＋ Create Production Order</button>
+  <button class="tab-btn" id="tab-fetch-btn" onclick="switchTab('fetch')">🖨 Fetch &amp; Print</button>
+</div>
+
+<!-- App shell; render() fills #app with messages, panels live below -->
+<div id="app"></div>
+
+<!-- ════════ TAB: CREATE ════════ -->
+<div class="tab-panel active" id="panel-create">
+  <div class="card">
+    <h2>New Production Order</h2>
+    <p class="sub">Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.</p>
+
+    <div class="grid2">
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="po-date">
+      </div>
+      <div class="field">
+        <label>Reference</label>
+        <input type="text" id="po-ref" placeholder="Auto: previous + 1">
+        <div class="hint">Auto-filled as the highest existing reference + 1. Editable.</div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="po-desc" placeholder="e.g. PO#52059">
+      </div>
+      <div class="field">
+        <label>Finished Inventory Item</label>
+        <select id="po-finished"><option value="">— Load records first —</option></select>
+      </div>
+      <div class="field">
+        <label>Finished Qty Produced</label>
+        <input type="number" id="po-qty" min="0" step="any" value="1">
+      </div>
+    </div>
+
+    <h2 style="margin-top:22px;font-size:14px">Bill of Materials (raw materials)</h2>
+    <table class="lines" id="bom-table">
+      <thead>
+        <tr>
+          <th style="width:54%">Raw Material</th>
+          <th style="width:18%">Unit</th>
+          <th style="width:24%" class="num">Budgeted Qty</th>
+          <th style="width:4%"></th>
+        </tr>
+      </thead>
+      <tbody id="bom-body"></tbody>
+    </table>
+    <button class="add-line" onclick="addBomLine()">＋ Add material line</button>
+
+    <div class="actions">
+      <button class="btn-primary" id="post-btn" onclick="submitProductionOrder()" disabled>Create Production Order</button>
+      <button class="btn-secondary" onclick="resetCreateForm()">Reset</button>
+    </div>
+    <div id="create-msg"></div>
+  </div>
+</div>
+
+<!-- ════════ TAB: FETCH & PRINT ════════ -->
+<div class="tab-panel" id="panel-fetch">
+  <div class="card">
+    <h2>Production Orders</h2>
+    <p class="sub">Select an order to open a customised, printable page with an automated <strong>per-unit cost</strong>.</p>
+    <div class="po-list" id="po-list"><div class="empty">Load records to list production orders.</div></div>
+  </div>
+  <div id="po-detail"></div>
+</div>
+
+<!-- Hidden print surface -->
+<div id="print-doc"></div>
+
+<script>
+/* ══════════════════════════════════
+   postMessage helper — DO NOT MODIFY
+══════════════════════════════════ */
+function postMessageWithResponse(message) {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error('Timeout — is this running inside Manager.io?'));
+    }, 15000);
+    function handler(event) {
+      if (event.data?.type?.endsWith('-response') && event.data?.requestId === requestId) {
+        clearTimeout(timer);
+        window.removeEventListener('message', handler);
+        resolve(event.data.body);
+      }
+    }
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ ...message, requestId }, '*');
+  });
+}
+
+/* ══════════════════════════════════
+   getInventoryItemBatch
+   Fetches ALL pages — DO NOT SIMPLIFY.
+   Manager.io returns ≤50 records per call.
+   This loop follows next_page_token until
+   every record is loaded.
+══════════════════════════════════ */
+async function getInventoryItemBatch(onProgress) {
+  const allItems = [];
+  let nextToken  = null;
+  let pageNum    = 0;
+  let apiTotal   = null;
+
+  do {
+    const path = nextToken
+      ? '/api4/inventory-item-batch?PageSize=99999&next_page_token=' + encodeURIComponent(nextToken)
+      : '/api4/inventory-item-batch?PageSize=99999';
+
+    const data = await postMessageWithResponse({ type: 'api-request', method: 'GET', path });
+
+    const page = Array.isArray(data) ? data : (data.items || data.data || []);
+    allItems.push(...page);
+
+    nextToken = data.next_page_token || data.nextPageToken || data._links?.next?.href || null;
+
+    if (apiTotal === null) {
+      apiTotal = data.totalCount ?? data.total ?? data.count ?? data._metadata?.totalCount ?? null;
+    }
+
+    pageNum++;
+    if (onProgress) onProgress(allItems.length, apiTotal, pageNum);
+    if (pageNum >= 1000) break;
+
+  } while (nextToken);
+
+  return allItems;
+}
+
+/* ══════════════════════════════════
+   getProductionOrderBatch
+   Same paginated pattern — follows
+   next_page_token until all orders load.
+══════════════════════════════════ */
+async function getProductionOrderBatch(onProgress) {
+  const allItems = [];
+  let nextToken  = null;
+  let pageNum    = 0;
+  let apiTotal   = null;
+
+  do {
+    const path = nextToken
+      ? '/api4/production-order-batch?PageSize=99999&next_page_token=' + encodeURIComponent(nextToken)
+      : '/api4/production-order-batch?PageSize=99999';
+
+    const data = await postMessageWithResponse({ type: 'api-request', method: 'GET', path });
+
+    const page = Array.isArray(data) ? data : (data.items || data.data || []);
+    allItems.push(...page);
+
+    nextToken = data.next_page_token || data.nextPageToken || data._links?.next?.href || null;
+    if (apiTotal === null) {
+      apiTotal = data.totalCount ?? data.total ?? data.count ?? data._metadata?.totalCount ?? null;
+    }
+
+    pageNum++;
+    if (onProgress) onProgress(allItems.length, apiTotal, pageNum);
+    if (pageNum >= 1000) break;
+
+  } while (nextToken);
+
+  return allItems;
+}
+
+/* ══════════════════════════════════
+   Global state + helpers
+══════════════════════════════════ */
+let INVENTORY = [];          // raw inventory-item-batch rows
+let PRODUCTION = [];         // raw production-order-batch rows
+let NAME_MAP   = {};         // inventory key -> display name
+let UNIT_MAP   = {};         // inventory key -> unit of measurement
+
+const num = v => (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits:4 });
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function fmtDate(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  return isNaN(dt) ? esc(d) : dt.toLocaleDateString('en-GB', { year:'numeric', month:'short', day:'numeric' });
+}
+
+/* ── Budgeted-Qty persistence ──
+   Manager has no native budgeted-qty field, so we
+   stash a machine-readable tag at the end of the
+   description on create, then parse it back out into
+   its own column on fetch/print and hide the tag from
+   the visible description. */
+const BUD_RE = /\u27E6BUD:([^\u27E7]*)\u27E7/;   // ⟦BUD:key=qty|key=qty⟧
+function encodeBudgets(map) {
+  const parts = Object.entries(map).filter(([k,v]) => k && Number(v) > 0).map(([k,v]) => `${k}=${v}`);
+  return parts.length ? `\u27E6BUD:${parts.join('|')}\u27E7` : '';
+}
+function parseBudgets(description) {
+  const out = { map:{}, clean:(description || '').toString() };
+  const m = out.clean.match(BUD_RE);
+  if (m) {
+    m[1].split('|').forEach(pair => {
+      const [k, v] = pair.split('=');
+      if (k) out.map[k] = Number(v) || 0;
+    });
+    out.clean = out.clean.replace(BUD_RE, '').replace(/\s*\|\s*$/,'').trim();
+  }
+  return out;
+}
+
+/* ── Auto reference = highest existing numeric reference + 1 ── */
+function nextReference() {
+  let max = 0;
+  PRODUCTION.forEach(r => {
+    const it = r?.item || r || {};
+    const ref = (it?.reference ?? it?.text ?? '').toString().trim();
+    const n = parseInt(ref, 10);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return String(max + 1);
+}
+
+/* ══════════════════════════════════
+   loadAllRecords — wired to Load button
+   Loads inventory (cost basis + finished-item
+   picker) AND production orders.
+══════════════════════════════════ */
+async function loadAllRecords() {
+  const btn    = document.getElementById('load-btn');
+  const bar    = document.getElementById('prog-bar');
+  const status = document.getElementById('status-txt');
+  const app    = document.getElementById('app');
+
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  bar.style.width = '0%';
+  app.innerHTML = '';
+
+  try {
+    // 1) Inventory items (cost lookup + dropdown source)
+    status.textContent = 'Loading inventory items…';
+    INVENTORY = await getInventoryItemBatch((loaded, total, page) => {
+      status.textContent = total
+        ? `Inventory · page ${page} · ${loaded.toLocaleString()} / ${total.toLocaleString()}`
+        : `Inventory · page ${page} · ${loaded.toLocaleString()} loaded…`;
+      if (total) bar.style.width = Math.min(45, Math.round(loaded / total * 45)) + '%';
+    });
+
+    // 2) Production orders
+    status.textContent = 'Loading production orders…';
+    PRODUCTION = await getProductionOrderBatch((loaded, total, page) => {
+      status.textContent = total
+        ? `Production orders · page ${page} · ${loaded.toLocaleString()} / ${total.toLocaleString()}`
+        : `Production orders · page ${page} · ${loaded.toLocaleString()} loaded…`;
+      bar.style.width = (50 + Math.min(45, page * 5)) + '%';
+    });
+
+    // Build lookup maps keyed by inventory item key
+    NAME_MAP = {}; UNIT_MAP = {};
+    for (const row of INVENTORY) {
+      const it = row?.item || row || {};
+      const key = row?.key || it?.key;
+      if (!key) continue;
+      NAME_MAP[key] = it?.nameWithCode || it?.itemName || it?.itemCode || key;
+      UNIT_MAP[key] = it?.unitName || '';
+    }
+
+    bar.style.width = '100%';
+    status.textContent = `✓ ${INVENTORY.length} inventory items · ${PRODUCTION.length} production orders`;
+    btn.textContent = '↺ Reload';
+    btn.disabled = false;
+    render();
+
+  } catch (err) {
+    status.textContent = '⚠ ' + err.message;
+    btn.textContent = '↺ Retry';
+    btn.disabled = false;
+    app.innerHTML = `<div class="err-box">⚠ ${esc(err.message)}<br><small>Make sure this is running inside Manager.io</small></div>`;
+  }
+}
+
+/* ══════════════════════════════════
+   render — populates both tabs once data is ready
+══════════════════════════════════ */
+function render() {
+  const app = document.getElementById('app');
+  if (!INVENTORY.length) {
+    app.innerHTML = `<div class="err-box">No inventory items found. The finished-item picker and cost lookups need at least one inventory item.</div>`;
+  } else {
+    app.innerHTML = `<div class="ok-box">Loaded ${INVENTORY.length} inventory items and ${PRODUCTION.length} production orders. You can now create or fetch orders.</div>`;
+  }
+
+  // Populate finished-item dropdown with ALL inventory items
+  const sel = document.getElementById('po-finished');
+  const prevFinished = sel.value;
+  sel.innerHTML = '<option value="">— Select finished item —</option>' + inventoryOptionsHtml(prevFinished);
+
+  // Refresh any material-line dropdowns that already exist, keeping their selection
+  document.querySelectorAll('#bom-body .bom-mat').forEach(s => {
+    const keep = s.value;
+    s.innerHTML = materialOptions(keep);
+    updateLineUnit(s);
+  });
+
+  // Enable create button + seed one BOM line if empty
+  document.getElementById('post-btn').disabled = false;
+  if (!document.getElementById('bom-body').children.length) addBomLine();
+
+  // Auto-fill reference (highest existing + 1) if the field is empty
+  const refEl = document.getElementById('po-ref');
+  if (!refEl.value.trim()) refEl.value = nextReference();
+
+  renderPoList();
+}
+
+/* ══════════════════════════════════
+   Inventory option helpers — shared by the
+   Finished Item picker AND every Material line.
+   Reads code/name/key defensively (works whether
+   a row is the {key,item} wrapper or a flat item)
+   and lists every inventory item, sorted by code.
+══════════════════════════════════ */
+function invFields(row) {
+  const it  = row?.item || row || {};        // accept wrapper or flat shape
+  const key = row?.key || it?.key || '';
+  const label = it?.nameWithCode
+    || [it?.itemCode, it?.itemName].filter(Boolean).join(' - ')
+    || it?.itemName || it?.itemCode || key || '(unnamed item)';
+  return { key, label, code: it?.itemCode || '', inactive: !!it?.inactive };
+}
+
+function sortedInventory() {
+  return [...INVENTORY].sort((a, b) => {
+    const A = invFields(a), B = invFields(b);
+    return (A.code || A.label).localeCompare(B.code || B.label, undefined, { numeric:true, sensitivity:'base' });
+  });
+}
+
+/* <option> list for ALL inventory items; marks the given key selected. */
+function inventoryOptionsHtml(selected) {
+  return sortedInventory().map(row => {
+    const { key, label, inactive } = invFields(row);
+    if (!key) return '';
+    const sel = key === selected ? ' selected' : '';
+    return `<option value="${esc(key)}"${sel}>${esc(label)}${inactive ? ' (inactive)' : ''}</option>`;
+  }).join('');
+}
+
+/* ══════════════════════════════════
+   Tab switching
+══════════════════════════════════ */
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  document.getElementById('tab-' + name + '-btn').classList.add('active');
+}
+
+/* ══════════════════════════════════
+   CREATE — Bill of Materials lines
+   Each line carries the extra "Budgeted Qty" column.
+══════════════════════════════════ */
+function materialOptions(selected) {
+  if (!INVENTORY.length) return '<option value="">— Load records first —</option>';
+  return '<option value="">— Select material —</option>' + inventoryOptionsHtml(selected);
+}
+
+function addBomLine() {
+  const tb = document.getElementById('bom-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><select class="bom-mat" onchange="updateLineUnit(this)">${materialOptions('')}</select></td>
+    <td class="bom-unit" style="color:#57606a">—</td>
+    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="0" placeholder="0"></td>
+    <td><button class="row-btn" title="Remove" onclick="this.closest('tr').remove()">✕</button></td>`;
+  tb.appendChild(tr);
+}
+
+/* Fill the Unit cell from the selected material's unit of measurement */
+function updateLineUnit(sel) {
+  const cell = sel.closest('tr')?.querySelector('.bom-unit');
+  if (cell) cell.textContent = UNIT_MAP[sel.value] || '—';
+}
+
+function resetCreateForm() {
+  document.getElementById('po-ref').value = INVENTORY.length ? nextReference() : '';
+  document.getElementById('po-desc').value = '';
+  document.getElementById('po-finished').value = '';
+  document.getElementById('po-qty').value = '1';
+  document.getElementById('bom-body').innerHTML = '';
+  document.getElementById('create-msg').innerHTML = '';
+  setToday();
+  addBomLine();
+}
+
+function setToday() {
+  document.getElementById('po-date').value = new Date().toISOString().slice(0,10);
+}
+
+/* ══════════════════════════════════
+   CREATE — build payload & POST
+   Mirrors the production-order schema; native
+   fields only. "Budgeted Qty" is an extension
+   planning column (Manager has no native field
+   for it) so it is preserved in the description.
+══════════════════════════════════ */
+function submitProductionOrder() {
+  const msg = document.getElementById('create-msg');
+  msg.innerHTML = '';
+
+  const finished = document.getElementById('po-finished').value;
+  const prodQty  = Number(document.getElementById('po-qty').value) || 0;
+
+  // Collect BOM lines; budgeted qty is the only quantity entered, used as the line qty
+  const bomLines = [];
+  const budgetMap = {};
+  document.querySelectorAll('#bom-body tr').forEach(tr => {
+    const key = tr.querySelector('.bom-mat')?.value || '';
+    const bud = Number(tr.querySelector('.bom-budget')?.value) || 0;
+    if (key) {
+      bomLines.push({ billOfMaterials: key, qty: bud, obsolete_Qty: null });
+      if (bud > 0) budgetMap[key] = bud;
+    }
+  });
+
+  // Native schema requires an expenseItems array; send a single zero placeholder
+  const expItems = [{ account: null, amount: 0, division: null }];
+
+  // Validate
+  if (!finished) { msg.innerHTML = `<div class="err-box">Please select a finished inventory item.</div>`; return; }
+  if (prodQty <= 0) { msg.innerHTML = `<div class="err-box">Finished qty must be greater than zero.</div>`; return; }
+  if (!bomLines.length) { msg.innerHTML = `<div class="err-box">Add at least one material line.</div>`; return; }
+
+  // Reference: use field value, else auto = highest existing + 1
+  const ref = document.getElementById('po-ref').value.trim() || nextReference();
+
+  // Description: keep user text clean; append a hidden budgeted-qty tag for round-tripping
+  let desc = document.getElementById('po-desc').value.trim();
+  const budTag = encodeBudgets(budgetMap);
+  const fullDesc = [desc, budTag].filter(Boolean).join(' ').trim();
+
+  const dateVal = document.getElementById('po-date').value;
+  const isoDate = dateVal ? new Date(dateVal + 'T00:00:00').toISOString() : new Date().toISOString();
+
+  // Payload — native production-order shape (modelled on the real batch record)
+  const payload = {
+    value: {
+      date: isoDate,
+      reference: ref,
+      inventoryLocation: null,
+      description: fullDesc || null,
+      finishedInventoryItem: finished,
+      qty: prodQty,
+      billOfMaterials: bomLines,
+      addNonInventoryCostIntoProduction: false,
+      expenseItems: expItems,
+      customTheme: false,
+      customThemeId: null,
+      customFields: null,
+      customFields2: { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null },
+      automaticReference: false,
+      obsolete_ExpenseAccount: null,
+      obsolete_Amount: null,
+      obsolete_JournalEntry: null,
+      obsolete_Reference: null,
+      obsolete_Qty: null,
+      transactionTitle: null
+    },
+    business: null
+  };
+
+  const btn = document.getElementById('post-btn');
+  btn.disabled = true; btn.textContent = 'Posting…';
+
+  postMessageWithResponse({ type:'api-request', method:'POST', path:'/api4/production-order', body: payload })
+    .then(resp => {
+      const newKey = resp?.key || resp?.id || (typeof resp === 'string' ? resp : null);
+      // Reflect the new order locally so the next reference auto-advances without a reload
+      PRODUCTION.push({ key: newKey, item: { ...payload.value, text: payload.value.reference } });
+      msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} created${newKey ? ' (key: ' + esc(newKey) + ')' : ''}.</div>`;
+      btn.textContent = 'Create Production Order'; btn.disabled = false;
+      // Advance reference field to the next number for the following entry
+      document.getElementById('po-ref').value = nextReference();
+      renderPoList();
+    })
+    .catch(err => {
+      msg.innerHTML = `<div class="err-box">⚠ Could not create order: ${esc(err.message)}</div>`;
+      btn.textContent = 'Create Production Order'; btn.disabled = false;
+    });
+}
+
+/* ══════════════════════════════════
+   FETCH — build the material detail for an order.
+   Budgeted Qty comes from the stored tag if present,
+   otherwise falls back to the native line qty.
+══════════════════════════════════ */
+function buildOrderDetail(item) {
+  const { map: budgetMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
+  const detail = lines.map(l => {
+    const key = l?.billOfMaterials;
+    const tagged = Number(budgetMap[key]);
+    const budget = (tagged > 0) ? tagged : (Number(l?.qty) || 0);
+    return {
+      name: NAME_MAP[key] || key || '—',
+      unit: UNIT_MAP[key] || '—',
+      budget
+    };
+  });
+  return { detail, cleanDesc };
+}
+
+/* List of production orders */
+function renderPoList() {
+  const wrap = document.getElementById('po-list');
+  if (!PRODUCTION.length) {
+    wrap.innerHTML = `<div class="empty">No production orders found.</div>`;
+    return;
+  }
+  wrap.innerHTML = PRODUCTION.map((row, idx) => {
+    const it = row?.item || {};
+    const d  = buildOrderDetail(it);
+    const ref = it?.reference || it?.text || '(no ref)';
+    return `
+      <div class="po-card" onclick="openOrder(${idx})">
+        <div class="row">
+          <span class="ref">#${esc(ref)}</span>
+          <span class="pill cost">${num(it?.qty)} produced</span>
+        </div>
+        <div class="desc">${esc(d.cleanDesc || '—')}</div>
+        <div class="meta">
+          <span>${fmtDate(it?.date)}</span>
+          <span>Finished: ${esc(NAME_MAP[it?.finishedInventoryItem] || it?.finishedInventoryItem || '—')}</span>
+          <span>Materials: ${d.detail.length}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* Customised, printable detail view */
+function openOrder(idx) {
+  const row = PRODUCTION[idx];
+  const it  = row?.item || {};
+  const d   = buildOrderDetail(it);
+  const ref = it?.reference || it?.text || '(no ref)';
+  const finishedName = NAME_MAP[it?.finishedInventoryItem] || it?.finishedInventoryItem || '—';
+
+  const rowsHtml = d.detail.map(m => `
+    <tr>
+      <td>${esc(m.name)}</td>
+      <td>${esc(m.unit)}</td>
+      <td class="num">${num(m.budget)}</td>
+    </tr>`).join('') || `<tr><td colspan="3" style="text-align:center;color:#888">No material lines</td></tr>`;
+
+  const docHtml = `
+    <div class="doc">
+      <div class="doc-head">
+        <h1>Production Order</h1>
+        <div class="biz">
+          <div><strong>Production Order #${esc(ref)}</strong></div>
+          <div>${fmtDate(it?.date)}</div>
+        </div>
+      </div>
+
+      <div class="doc-meta">
+        <div><div class="k">Reference</div><div class="v">${esc(ref)}</div></div>
+        <div><div class="k">Date</div><div class="v">${fmtDate(it?.date)}</div></div>
+        <div><div class="k">Finished Item</div><div class="v">${esc(finishedName)}</div></div>
+        <div><div class="k">Finished Qty</div><div class="v">${num(it?.qty)}</div></div>
+        <div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc || '—')}</div></div>
+      </div>
+
+      <table class="doc-tbl">
+        <thead>
+          <tr><th>Raw Material</th><th>Unit of Measurement</th><th class="num">Budgeted Qty</th></tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>`;
+
+  // On-screen detail (with print button) + hidden print surface
+  document.getElementById('po-detail').innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+        <h2 style="margin:0">Order #${esc(ref)} — customised view</h2>
+        <div style="display:flex;gap:10px">
+          <button class="btn-primary" onclick="printOrder()">🖨 Print / Save as PDF</button>
+          <button class="btn-secondary" onclick="document.getElementById('po-detail').innerHTML=''">Close</button>
+        </div>
+      </div>
+      ${docHtml}
+    </div>`;
+  document.getElementById('print-doc').innerHTML = docHtml;
+  document.getElementById('po-detail').scrollIntoView({ behavior:'smooth' });
+}
+
+/* Trigger browser print dialog → user picks "Save as PDF" */
+function printOrder() { window.print(); }
+
+/* Initialise */
+setToday();
+</script>
+</body>
+</html>
