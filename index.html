@@ -102,10 +102,10 @@
   .doc-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
   .doc-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#777; }
   .doc-meta .v { font-size:14px; font-weight:600; }
-  table.doc-tbl { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:18px; }
-  table.doc-tbl th { background:#f3f5f7; text-align:left; padding:9px 10px; font-size:11px; text-transform:uppercase; letter-spacing:.03em; border-bottom:2px solid #ccc; }
-  table.doc-tbl td { padding:8px 10px; border-bottom:1px solid #eee; }
-  table.doc-tbl tfoot td { font-weight:700; border-top:2px solid #ccc; border-bottom:none; }
+  table.doc-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:18px; table-layout:fixed; }
+  table.doc-tbl th { background:#f3f5f7; text-align:left; padding:7px 6px; font-size:10px; text-transform:uppercase; letter-spacing:.02em; border:1px solid #ccc; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:bottom; }
+  table.doc-tbl td { padding:7px 6px; border:1px solid #ddd; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:top; height:30px; }
+  table.doc-tbl tfoot td { font-weight:700; border-top:2px solid #ccc; }
   .perunit-box { display:flex; justify-content:flex-end; }
   .perunit-card { border:2px solid #0969da; border-radius:10px; padding:12px 20px; text-align:right; }
   .perunit-card .k { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#0969da; }
@@ -116,8 +116,10 @@
     body * { visibility:hidden; }
     #print-doc, #print-doc * { visibility:visible; }
     #print-doc { display:block !important; position:absolute; left:0; top:0; width:100%; padding:0; }
-    .doc { border:none; border-radius:0; margin:0; padding:10px; }
-    @page { margin:16mm; }
+    .doc { border:none; border-radius:0; margin:0; padding:6px; }
+    table.doc-tbl { font-size:11px; }
+    table.doc-tbl td { height:34px; }   /* room to write in blank columns */
+    @page { size:portrait; margin:12mm; }
   }
 </style>
 </head>
@@ -142,7 +144,7 @@
 <div class="tab-panel active" id="panel-create">
   <div class="card">
     <h2 id="create-title">New Production Order</h2>
-    <p class="sub" id="create-sub">Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.</p>
+    <p class="sub" id="create-sub">Enter the order details and the <strong>Required</strong> and <strong>Issued</strong> quantity for each raw material, then post it to Manager.</p>
     <div id="edit-banner"></div>
 
     <div class="grid2">
@@ -178,10 +180,10 @@
     <table class="lines" id="bom-table">
       <thead>
         <tr>
-          <th style="width:40%">Raw Material</th>
+          <th style="width:42%">Raw Material</th>
           <th style="width:14%">Unit</th>
-          <th style="width:20%" class="num">Budgeted Qty</th>
-          <th style="width:22%" class="num">Actual Qty Issue</th>
+          <th style="width:20%" class="num">Required</th>
+          <th style="width:20%" class="num">Issued</th>
           <th style="width:4%"></th>
         </tr>
       </thead>
@@ -619,8 +621,8 @@ function addBomLine(opts) {
       </div>
     </td>
     <td class="bom-unit" style="color:#57606a">${esc(UNIT_MAP[key] || '—')}</td>
-    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${budget}" placeholder="0"></td>
-    <td class="num"><input type="number" class="bom-issue num" min="0" step="any" value="${issue}" placeholder="0"></td>
+    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${budget || ''}" placeholder="0"></td>
+    <td class="num"><input type="number" class="bom-issue num" min="0" step="any" value="${issue > 0 ? issue : ''}" placeholder=""></td>
     <td><button class="row-btn" title="Remove" onclick="this.closest('tr').remove()">✕</button></td>`;
   tb.appendChild(tr);
 }
@@ -645,7 +647,7 @@ function setToday() {
 function exitEditMode() {
   EDIT_KEY = null; EDIT_ITEM = null;
   document.getElementById('create-title').textContent = 'New Production Order';
-  document.getElementById('create-sub').innerHTML = 'Enter the order details and a <strong>Budgeted Qty</strong> for each raw material, then post it to Manager.';
+  document.getElementById('create-sub').innerHTML = 'Enter the order details and the <strong>Required</strong> and <strong>Issued</strong> quantity for each raw material, then post it to Manager.';
   document.getElementById('edit-banner').innerHTML = '';
   document.getElementById('post-btn').textContent = 'Create Production Order';
 }
@@ -661,7 +663,7 @@ function editOrder(idx) {
 
   switchTab('create');
   document.getElementById('create-title').textContent = 'Edit Production Order';
-  document.getElementById('create-sub').textContent = 'Update the order below. Existing material quantities are preserved; the print-only Budgeted Qty and Actual Qty Issue are editable per line.';
+  document.getElementById('create-sub').textContent = 'Update the order below. Existing material quantities are preserved; the print-only Required and Issued values are editable per line.';
   document.getElementById('edit-banner').innerHTML =
     `<div class="ok-box">Editing order #${esc(it?.reference || it?.text || '')}. Changes will be saved back to Manager. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel edit</button></div>`;
   document.getElementById('post-btn').textContent = 'Update Production Order';
@@ -866,9 +868,12 @@ function openOrder(idx) {
     <tr>
       <td>${esc(m.name)}</td>
       <td>${esc(m.unit)}</td>
-      <td class="num">${m.budget > 0 ? num(m.budget) : '—'}</td>
-      <td class="num">${m.actualIssue > 0 ? num(m.actualIssue) : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:#888">No material lines</td></tr>`;
+      <td class="num">${m.budget > 0 ? num(m.budget) : ''}</td>
+      <td class="num">${m.actualIssue > 0 ? num(m.actualIssue) : ''}</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>`).join('') || `<tr><td colspan="7" style="text-align:center;color:#888">No material lines</td></tr>`;
 
   const docHtml = `
     <div class="doc">
@@ -890,7 +895,15 @@ function openOrder(idx) {
 
       <table class="doc-tbl">
         <thead>
-          <tr><th>Raw Material</th><th>Unit of Measurement</th><th class="num">Budgeted Qty</th><th class="num">Actual Qty Issue</th></tr>
+          <tr>
+            <th style="width:21%">Raw Material</th>
+            <th style="width:8%">Unit</th>
+            <th class="num" style="width:9%">Required</th>
+            <th class="num" style="width:9%">Issued</th>
+            <th style="width:22%">Components description</th>
+            <th style="width:13%">Consumption</th>
+            <th style="width:18%">Remarks</th>
+          </tr>
         </thead>
         <tbody>
           ${rowsHtml}
