@@ -112,6 +112,16 @@
   .perunit-card .v { font-size:26px; font-weight:800; color:#0969da; font-variant-numeric:tabular-nums; }
   .perunit-card .f { font-size:10px; color:#888; margin-top:3px; }
 
+  /* ── Department BOM sections ── */
+  .bom-section { margin-top:18px; padding-top:6px; border-top:1px solid #e6eaef; }
+  .bom-section:first-child { border-top:none; }
+  .bom-section-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .bom-section-num { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; background:#0969da; color:#fff; font-size:12px; font-weight:700; flex:none; }
+  .bom-section-title { font-size:14px; font-weight:700; color:#24292f; border:1px solid transparent; border-radius:6px; padding:4px 8px; background:#f6f8fa; min-width:280px; }
+  .bom-section-title:focus { outline:none; border-color:#0969da; background:#fff; box-shadow:0 0 0 3px rgba(9,105,218,.12); }
+  .doc-section { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; margin:16px 0 6px; padding-bottom:3px; border-bottom:2px solid #111; }
+  .doc-section:first-of-type { margin-top:6px; }
+
   @media print {
     body * { visibility:hidden; }
     #print-doc, #print-doc * { visibility:visible; }
@@ -119,7 +129,8 @@
     .doc { border:none; border-radius:0; margin:0; padding:6px; }
     table.doc-tbl { font-size:11px; }
     table.doc-tbl td { height:34px; }   /* room to write in blank columns */
-    @page { size:portrait; margin:12mm; }
+    .doc-section-block { break-inside:avoid; page-break-inside:avoid; }
+    @page { margin:12mm; }   /* orientation left to the user's print dialog */
   }
 </style>
 </head>
@@ -149,6 +160,11 @@
 
     <div class="grid2">
       <div class="field">
+        <label>Delivery Date</label>
+        <input type="date" id="po-delivery">
+        <div class="hint">The production order date (Delivery Date).</div>
+      </div>
+      <div class="field">
         <label>Issue Sheet Date</label>
         <input type="date" id="po-date">
         <div class="hint">Stored in the "Issue Sheet Date" custom field.</div>
@@ -177,19 +193,7 @@
     </div>
 
     <h2 style="margin-top:22px;font-size:14px">Bill of Materials (raw materials)</h2>
-    <table class="lines" id="bom-table">
-      <thead>
-        <tr>
-          <th style="width:42%">Raw Material</th>
-          <th style="width:14%">Unit</th>
-          <th style="width:20%" class="num">Required</th>
-          <th style="width:20%" class="num">Issued</th>
-          <th style="width:4%"></th>
-        </tr>
-      </thead>
-      <tbody id="bom-body"></tbody>
-    </table>
-    <button class="add-line" onclick="addBomLine()">＋ Add material line</button>
+    <div id="bom-sections"></div>
 
     <div class="actions">
       <button class="btn-primary" id="post-btn" onclick="submitProductionOrder()" disabled>Create Production Order</button>
@@ -332,23 +336,40 @@ function fmtDate(d) {
 function orderDate(it) {
   return it?.customFields2?.dates?.[ISSUE_DATE_KEY] || it?.date || null;
 }
+/* Delivery Date = native production-order date */
+function deliveryDate(it) { return it?.date || null; }
+/* Issue Sheet Date = custom field (fallback native) */
+function issueDate(it) { return it?.customFields2?.dates?.[ISSUE_DATE_KEY] || it?.date || null; }
 
-/* ── Print-only quantity persistence ──
-   Manager has no native budgeted-qty or actual-issue field, so on
-   create/update we stash machine-readable tags at the end of the
-   description (⟦BUD:…⟧ for Budgeted Qty, ⟦AQI:…⟧ for Actual Qty Issue),
-   parse them back into their own columns on fetch/print, and hide them
-   from the visible description. We also read the older human-readable
-   "| Budgeted: Name: budget N; …" format. */
+/* ── Print-only per-line data persistence ──
+   Manager has no native fields for Description, Composition, Required,
+   Issued or Remarks, so on create/update we stash them in the description.
+   The current format is a single ⟦POX:<base64 JSON>⟧ tag holding one entry
+   per material line (index-aligned to billOfMaterials), which safely carries
+   free text. We also still READ the older ⟦BUD:…⟧ / ⟦AQI:…⟧ tags and the
+   human-readable "| Budgeted: Name: budget N; …" format for existing orders.
+   None of this affects a material's actual backend quantity. */
+const POX_RE    = /\u27E6POX:([^\u27E7]*)\u27E7/;           // ⟦POX:base64⟧ (per-line array)
 const BUD_RE    = /\u27E6BUD:([^\u27E7]*)\u27E7/;            // ⟦BUD:key=qty|key=qty⟧
 const AQI_RE    = /\u27E6AQI:([^\u27E7]*)\u27E7/;            // ⟦AQI:key=qty|key=qty⟧
 const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name: budget N; …
+
+function b64encodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
+function b64decodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
+
+/* v2 format: { v:2, sec:[titles], ln:[{ s, r, i, d, c, m }] } aligned to billOfMaterials.
+   Older orders may carry a bare array of {r,i,d,c,m} (single-section); still readable. */
+function encodeLineExtras(sectionTitles, lines) {
+  const hasAny = lines.some(l => (Number(l.r)||0) || (Number(l.i)||0) || (l.d||'').trim() || (l.c||'').trim() || (l.m||'').trim());
+  const hasCustomTitles = (sectionTitles || []).some((t, i) => (t||'').trim() !== (DEFAULT_SECTIONS[i] || '').trim());
+  if (!hasAny && !hasCustomTitles) return '';
+  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], ln:lines }))}\u27E7`; }
+  catch (e) { return ''; }
+}
 function encodeTag(prefix, map) {
   const parts = Object.entries(map).filter(([k,v]) => k && Number(v) > 0).map(([k,v]) => `${k}=${v}`);
   return parts.length ? `\u27E6${prefix}:${parts.join('|')}\u27E7` : '';
 }
-function encodeBudgets(map) { return encodeTag('BUD', map); }
-function encodeActuals(map) { return encodeTag('AQI', map); }
 function parseTagInto(re, clean, target) {
   const m = clean.match(re);
   if (m) {
@@ -361,9 +382,20 @@ function parseTagInto(re, clean, target) {
   return clean;
 }
 function parseBudgets(description) {
-  const out = { map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
+  const out = { byIndex:null, sections:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
 
-  // Current formats: ⟦BUD:uuid=qty|…⟧ and ⟦AQI:uuid=qty|…⟧ (keyed by material UUID)
+  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles), index-aligned
+  const pm = out.clean.match(POX_RE);
+  if (pm) {
+    try {
+      const obj = JSON.parse(b64decodeUnicode(pm[1]));
+      if (Array.isArray(obj)) { out.byIndex = obj; }                          // v1: bare array, single section
+      else if (obj && Array.isArray(obj.ln)) { out.byIndex = obj.ln; out.sections = Array.isArray(obj.sec) ? obj.sec : null; }
+    } catch (e) {}
+    out.clean = out.clean.replace(POX_RE, '').trim();
+  }
+
+  // Older formats: ⟦BUD:uuid=qty|…⟧ and ⟦AQI:uuid=qty|…⟧ (keyed by material UUID)
   out.clean = parseTagInto(BUD_RE, out.clean, out.map);
   out.clean = parseTagInto(AQI_RE, out.clean, out.actualMap);
 
@@ -470,17 +502,19 @@ function render() {
   finInput.placeholder = 'Search finished item…';
   finInput.value = fin.dataset.value ? (NAME_MAP[fin.dataset.value] || fin.dataset.value) : '';
 
+  // Build the six department sections if not already present
+  if (!document.querySelector('#bom-sections .bom-section')) renderBomSections();
+
   // Refresh any existing material-line combos (resolve labels + units)
-  document.querySelectorAll('#bom-body .bom-mat-combo').forEach(combo => {
+  document.querySelectorAll('#bom-sections .bom-mat-combo').forEach(combo => {
     const input = combo.querySelector('.combo-input');
     input.placeholder = 'Search material…';
     input.value = combo.dataset.value ? (NAME_MAP[combo.dataset.value] || combo.dataset.value) : '';
     comboOnPick(combo);
   });
 
-  // Enable create button + seed one BOM line if empty
+  // Enable create button
   document.getElementById('post-btn').disabled = false;
-  if (!document.getElementById('bom-body').children.length) addBomLine();
 
   // Auto-fill reference (highest existing + 1) if the field is empty
   const refEl = document.getElementById('po-ref');
@@ -597,20 +631,71 @@ function switchTab(name) {
 }
 
 /* ══════════════════════════════════
-   CREATE — Bill of Materials lines.
-   Each row: searchable material combo, Unit, Budgeted Qty,
-   Actual Qty Issue (both print-only), plus a preserved
-   backend actual-qty kept in the row dataset.
+   CREATE — Department BOM sections.
+   The production order is split into six department sections.
+   Each material line records its section index so the order
+   regroups correctly on edit and print.
 ══════════════════════════════════ */
-function addBomLine(opts) {
+const DEFAULT_SECTIONS = ['CUTTING', 'CLOSING', 'IN/OUT SOLE', 'LASTING & FINISHING', '', 'COSTING & PLANNING DEPARTMENT'];
+const SECTION_COUNT = DEFAULT_SECTIONS.length;
+
+function sectionColsHtml() {
+  return `
+    <thead>
+      <tr>
+        <th style="width:17%">Raw Material</th>
+        <th style="width:15%">Description</th>
+        <th style="width:7%">Unit</th>
+        <th style="width:12%">Composition</th>
+        <th style="width:10%" class="num">Required</th>
+        <th style="width:10%" class="num">Issued</th>
+        <th style="width:19%">Remarks</th>
+        <th style="width:4%"></th>
+      </tr>
+    </thead>`;
+}
+
+/* Build the six empty section shells. Titles default to the department names. */
+function renderBomSections(titles) {
+  const host = document.getElementById('bom-sections');
+  host.innerHTML = '';
+  for (let i = 0; i < SECTION_COUNT; i++) {
+    const title = (titles && titles[i] != null) ? titles[i] : DEFAULT_SECTIONS[i];
+    const sec = document.createElement('div');
+    sec.className = 'bom-section';
+    sec.dataset.section = i;
+    sec.innerHTML = `
+      <div class="bom-section-head">
+        <span class="bom-section-num">${i + 1}</span>
+        <input type="text" class="bom-section-title" value="${esc(title)}" placeholder="Section ${i + 1} heading…">
+      </div>
+      <table class="lines">
+        ${sectionColsHtml()}
+        <tbody id="bom-body-${i}"></tbody>
+      </table>
+      <button class="add-line" onclick="addBomLine(${i})">＋ Add material line</button>`;
+    host.appendChild(sec);
+  }
+}
+
+/* Read the six section titles from the form */
+function getSectionTitles() {
+  return Array.from(document.querySelectorAll('#bom-sections .bom-section-title')).map(i => (i.value || '').trim());
+}
+
+function addBomLine(sectionIndex, opts) {
   opts = opts || {};
   const key    = opts.key || '';
-  const budget = Number(opts.budget) || 0;
-  const issue  = Number(opts.actualIssue) || 0;
+  const desc   = opts.description || '';
+  const comp   = opts.composition || '';
+  const req    = Number(opts.required) || 0;
+  const issue  = Number(opts.issued) || 0;
+  const rem    = opts.remarks || '';
   const actual = Number(opts.actualQty) || 0;   // preserved backend qty; 0 for new lines
-  const tb = document.getElementById('bom-body');
+  const tb = document.getElementById('bom-body-' + (sectionIndex || 0));
+  if (!tb) return;
   const tr = document.createElement('tr');
-  tr.dataset.actualQty = actual;                 // hidden: never driven by budget/issue
+  tr.dataset.actualQty = actual;                 // hidden: never driven by these fields
   const label = key ? (NAME_MAP[key] || key) : '';
   tr.innerHTML = `
     <td>
@@ -620,9 +705,12 @@ function addBomLine(opts) {
         <div class="combo-list"></div>
       </div>
     </td>
+    <td><input type="text" class="bom-desc" value="${esc(desc)}" placeholder=""></td>
     <td class="bom-unit" style="color:#57606a">${esc(UNIT_MAP[key] || '—')}</td>
-    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${budget || ''}" placeholder="0"></td>
+    <td><input type="text" class="bom-comp" value="${esc(comp)}" placeholder=""></td>
+    <td class="num"><input type="number" class="bom-budget num" min="0" step="any" value="${req || ''}" placeholder="0"></td>
     <td class="num"><input type="number" class="bom-issue num" min="0" step="any" value="${issue > 0 ? issue : ''}" placeholder=""></td>
+    <td><input type="text" class="bom-remarks" value="${esc(rem)}" placeholder=""></td>
     <td><button class="row-btn" title="Remove" onclick="this.closest('tr').remove()">✕</button></td>`;
   tb.appendChild(tr);
 }
@@ -631,16 +719,17 @@ function resetCreateForm() {
   exitEditMode();
   document.getElementById('po-ref').value = INVENTORY.length ? nextReference() : '';
   document.getElementById('po-desc').value = '';
-  document.getElementById('po-finished').value = '';
+  comboSetValue(document.getElementById('po-finished'), '');
   document.getElementById('po-qty').value = '1';
-  document.getElementById('bom-body').innerHTML = '';
+  renderBomSections();          // six fresh, empty department sections
   document.getElementById('create-msg').innerHTML = '';
   setToday();
-  addBomLine();
 }
 
 function setToday() {
-  document.getElementById('po-date').value = new Date().toISOString().slice(0,10);
+  const t = new Date().toISOString().slice(0,10);
+  document.getElementById('po-date').value = t;
+  document.getElementById('po-delivery').value = t;
 }
 
 /* Leave edit mode and restore the create-form chrome */
@@ -668,27 +757,38 @@ function editOrder(idx) {
     `<div class="ok-box">Editing order #${esc(it?.reference || it?.text || '')}. Changes will be saved back to Manager. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel edit</button></div>`;
   document.getElementById('post-btn').textContent = 'Update Production Order';
 
-  // Date from the Issue Sheet Date custom field (fallback native)
-  const d = orderDate(it);
-  document.getElementById('po-date').value = d ? new Date(d).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  // Delivery Date = native order date; Issue Sheet Date = custom field
+  const dDel = deliveryDate(it);
+  const dIss = issueDate(it);
+  document.getElementById('po-delivery').value = dDel ? new Date(dDel).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  document.getElementById('po-date').value = dIss ? new Date(dIss).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
 
   document.getElementById('po-ref').value = it?.reference ?? it?.text ?? '';
   comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
   document.getElementById('po-qty').value = Number(it?.qty) || 0;
 
-  const { nameMap, map, actualMap, clean } = parseBudgets(it?.description);
+  const { byIndex, sections, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
   document.getElementById('po-desc').value = clean || '';
 
-  // Rebuild BOM rows, preserving each line's actual backend qty; print-only fields from tags
-  const body = document.getElementById('bom-body');
-  body.innerHTML = '';
+  // Rebuild the six sections (use saved titles if any), then place each line in its section
+  renderBomSections(sections || null);
   const lines = Array.isArray(it?.billOfMaterials) ? it.billOfMaterials : [];
-  if (!lines.length) { addBomLine(); }
-  lines.forEach(l => {
+  lines.forEach((l, i) => {
     const key = l?.billOfMaterials || '';
-    const budget = (Number(map[key]) || 0) || (Number(nameMap[NAME_MAP[key]]) || 0);
-    const actualIssue = Number(actualMap[key]) || 0;
-    addBomLine({ key, budget, actualIssue, actualQty: Number(l?.qty) || 0 });
+    const e = (byIndex && byIndex[i]) ? byIndex[i] : null;
+    const required = e ? (Number(e.r) || 0) : ((Number(map[key]) || 0) || (Number(nameMap[NAME_MAP[key]]) || 0));
+    const issued   = e ? (Number(e.i) || 0) : (Number(actualMap[key]) || 0);
+    let s = (e && Number.isInteger(e.s)) ? e.s : 0;
+    if (s < 0 || s >= SECTION_COUNT) s = 0;
+    addBomLine(s, {
+      key,
+      description: e ? (e.d || '') : '',
+      composition: e ? (e.c || '') : '',
+      required,
+      issued,
+      remarks: e ? (e.m || '') : '',
+      actualQty: Number(l?.qty) || 0
+    });
   });
 
   document.getElementById('create-msg').innerHTML = '';
@@ -708,50 +808,56 @@ function submitProductionOrder() {
   const finished = comboValue(document.getElementById('po-finished'));
   const prodQty  = Number(document.getElementById('po-qty').value) || 0;
 
-  // Collect BOM lines. Actual backend qty comes from the row's preserved value
-  // (0 for new lines). Budgeted Qty and Actual Qty Issue are print-only and
-  // stored only in description tags — they never become the line qty.
+  // Collect BOM lines from all six sections. Actual backend qty comes from the row's
+  // preserved value (0 for new lines). Description, Composition, Required, Issued, Remarks
+  // and the section index are print-only and stored in the description (⟦POX⟧) — never the line qty.
   const bomLines = [];
-  const budgetMap = {};
-  const actualMap = {};
-  document.querySelectorAll('#bom-body tr').forEach(tr => {
-    const key = comboValue(tr.querySelector('.bom-mat-combo'));
-    const bud = Number(tr.querySelector('.bom-budget')?.value) || 0;
-    const iss = Number(tr.querySelector('.bom-issue')?.value) || 0;
-    const actual = Number(tr.dataset.actualQty) || 0;
-    if (key) {
+  const extras = [];   // index-aligned to bomLines; each carries its section index `s`
+  for (let s = 0; s < SECTION_COUNT; s++) {
+    document.querySelectorAll('#bom-body-' + s + ' tr').forEach(tr => {
+      const key = comboValue(tr.querySelector('.bom-mat-combo'));
+      if (!key) return;
+      const actual = Number(tr.dataset.actualQty) || 0;
       bomLines.push({ billOfMaterials: key, qty: actual, obsolete_Qty: null });
-      if (bud > 0) budgetMap[key] = bud;
-      if (iss > 0) actualMap[key] = iss;
-    }
-  });
+      extras.push({
+        s,                                                        // section index
+        r: Number(tr.querySelector('.bom-budget')?.value) || 0,   // Required
+        i: Number(tr.querySelector('.bom-issue')?.value) || 0,    // Issued
+        d: (tr.querySelector('.bom-desc')?.value || '').trim(),   // Description
+        c: (tr.querySelector('.bom-comp')?.value || '').trim(),   // Composition
+        m: (tr.querySelector('.bom-remarks')?.value || '').trim() // Remarks
+      });
+    });
+  }
+  const sectionTitles = getSectionTitles();
 
   // Validate
   if (!finished) { msg.innerHTML = `<div class="err-box">Please select a finished inventory item.</div>`; return; }
   if (prodQty <= 0) { msg.innerHTML = `<div class="err-box">Finished qty must be greater than zero.</div>`; return; }
-  if (!bomLines.length) { msg.innerHTML = `<div class="err-box">Add at least one material line.</div>`; return; }
+  if (!bomLines.length) { msg.innerHTML = `<div class="err-box">Add at least one material line in any section.</div>`; return; }
 
   // Reference: use field value, else auto = highest existing + 1
   const ref = document.getElementById('po-ref').value.trim() || nextReference();
 
-  // Description: keep user text clean; append hidden print-only tags for round-tripping
+  // Description: keep user text clean; append a hidden per-line tag for round-tripping
   const desc = document.getElementById('po-desc').value.trim();
-  const budTag = encodeBudgets(budgetMap);
-  const aqiTag = encodeActuals(actualMap);
-  const fullDesc = [desc, budTag, aqiTag].filter(Boolean).join(' ').trim();
+  const poxTag = encodeLineExtras(sectionTitles, extras);
+  const fullDesc = [desc, poxTag].filter(Boolean).join(' ').trim();
 
-  const dateVal = document.getElementById('po-date').value;
-  const isoDate = dateVal ? new Date(dateVal + 'T00:00:00').toISOString() : new Date().toISOString();
+  const issueVal = document.getElementById('po-date').value;
+  const issueIso = issueVal ? new Date(issueVal + 'T00:00:00').toISOString() : new Date().toISOString();
+  const delVal = document.getElementById('po-delivery').value;
+  const deliveryIso = delVal ? new Date(delVal + 'T00:00:00').toISOString() : issueIso;
 
   // Preserve any existing customFields2 sub-objects, then set the Issue Sheet Date custom field
   const baseCF2 = (EDIT_ITEM && EDIT_ITEM.customFields2) ? { ...EDIT_ITEM.customFields2 } : { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null };
-  baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: isoDate };
+  baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: issueIso };
 
   // Build the order value — start from the original on edit to keep untouched fields intact
   const base = EDIT_ITEM ? { ...EDIT_ITEM } : {};
   const value = {
     ...base,
-    date: isoDate,                       // native date mirrored from Issue Sheet Date
+    date: deliveryIso,                   // native production-order date = Delivery Date
     reference: ref,
     inventoryLocation: base.inventoryLocation ?? null,
     description: fullDesc || null,
@@ -811,22 +917,28 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { byIndex, sections, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
-  const detail = lines.map(l => {
+  const detail = lines.map((l, i) => {
     const key  = l?.billOfMaterials;
     const name = NAME_MAP[key] || key || '—';
-    // Print-only values: UUID tag first, then legacy name match. Never the backend line qty.
-    const budget = (Number(budgetMap[key]) || 0) || (Number(nameMap[name]) || 0);
-    const actualIssue = Number(actualMap[key]) || 0;
+    const e = (byIndex && byIndex[i]) ? byIndex[i] : null;
+    const required = e ? (Number(e.r) || 0) : ((Number(budgetMap[key]) || 0) || (Number(nameMap[name]) || 0));
+    const issued   = e ? (Number(e.i) || 0) : (Number(actualMap[key]) || 0);
+    let s = (e && Number.isInteger(e.s)) ? e.s : 0;
+    if (s < 0 || s >= SECTION_COUNT) s = 0;
     return {
+      section: s,
       name,
       unit: UNIT_MAP[key] || '—',
-      budget,
-      actualIssue
+      description: e ? (e.d || '') : '',
+      composition: e ? (e.c || '') : '',
+      required,
+      issued,
+      remarks: e ? (e.m || '') : ''
     };
   });
-  return { detail, cleanDesc };
+  return { detail, cleanDesc, sections };
 }
 
 /* List of production orders */
@@ -848,7 +960,7 @@ function renderPoList() {
         </div>
         <div class="desc">${esc(d.cleanDesc || '—')}</div>
         <div class="meta">
-          <span>${fmtDate(orderDate(it))}</span>
+          <span>Delivery: ${fmtDate(deliveryDate(it))}</span>
           <span>Finished: ${esc(NAME_MAP[it?.finishedInventoryItem] || it?.finishedInventoryItem || '—')}</span>
           <span>Materials: ${d.detail.length}</span>
         </div>
@@ -864,16 +976,49 @@ function openOrder(idx) {
   const ref = it?.reference || it?.text || '(no ref)';
   const finishedName = NAME_MAP[it?.finishedInventoryItem] || it?.finishedInventoryItem || '—';
 
-  const rowsHtml = d.detail.map(m => `
-    <tr>
-      <td>${esc(m.name)}</td>
-      <td></td>
-      <td>${esc(m.unit)}</td>
-      <td></td>
-      <td class="num">${m.budget > 0 ? num(m.budget) : ''}</td>
-      <td class="num">${m.actualIssue > 0 ? num(m.actualIssue) : ''}</td>
-      <td></td>
-    </tr>`).join('') || `<tr><td colspan="7" style="text-align:center;color:#888">No material lines</td></tr>`;
+  // One table per department section, in section order
+  const colHead = `
+    <thead>
+      <tr>
+        <th style="width:15%">Raw Material</th>
+        <th style="width:15%">Description</th>
+        <th style="width:8%">Unit</th>
+        <th style="width:12%">Composition</th>
+        <th class="num" style="width:10%">Required</th>
+        <th class="num" style="width:22%">Issued</th>
+        <th style="width:18%">Remarks</th>
+      </tr>
+    </thead>`;
+  const sectionTitle = (i) => {
+    const t = (d.sections && d.sections[i] != null && String(d.sections[i]).trim())
+      ? String(d.sections[i]).trim()
+      : (DEFAULT_SECTIONS[i] || `Section ${i + 1}`);
+    return t || `Section ${i + 1}`;
+  };
+  const BLANK_ROWS = 3;   // empty writing rows for sections with no materials
+  const blankRow = `<tr><td></td><td></td><td></td><td></td><td class="num"></td><td class="num"></td><td></td></tr>`;
+
+  let sectionsHtml = '';
+  for (let i = 0; i < SECTION_COUNT; i++) {
+    const items = d.detail.filter(m => m.section === i);
+    const rows = items.length
+      ? items.map(m => `
+        <tr>
+          <td>${esc(m.name)}</td>
+          <td>${esc(m.description)}</td>
+          <td>${esc(m.unit)}</td>
+          <td>${esc(m.composition)}</td>
+          <td class="num">${m.required > 0 ? num(m.required) : ''}</td>
+          <td class="num">${m.issued > 0 ? num(m.issued) : ''}</td>
+          <td>${esc(m.remarks)}</td>
+        </tr>`).join('')
+      : blankRow.repeat(BLANK_ROWS);
+    sectionsHtml += `
+      <div class="doc-section-block">
+        <div class="doc-section">${i + 1}. ${esc(sectionTitle(i))}</div>
+        <table class="doc-tbl">${colHead}<tbody>${rows}</tbody></table>
+      </div>`;
+  }
 
   const docHtml = `
     <div class="doc">
@@ -881,34 +1026,20 @@ function openOrder(idx) {
         <h1>Production Order</h1>
         <div class="biz">
           <div><strong>Production Order #${esc(ref)}</strong></div>
-          <div>${fmtDate(orderDate(it))}</div>
+          <div>Delivery: ${fmtDate(deliveryDate(it))}</div>
         </div>
       </div>
 
       <div class="doc-meta">
         <div><div class="k">Reference</div><div class="v">${esc(ref)}</div></div>
-        <div><div class="k">Issue Sheet Date</div><div class="v">${fmtDate(orderDate(it))}</div></div>
+        <div><div class="k">Delivery Date</div><div class="v">${fmtDate(deliveryDate(it))}</div></div>
+        <div><div class="k">Issue Sheet Date</div><div class="v">${fmtDate(issueDate(it))}</div></div>
         <div><div class="k">Finished Item</div><div class="v">${esc(finishedName)}</div></div>
         <div><div class="k">Finished Qty</div><div class="v">${num(it?.qty)}</div></div>
         <div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc || '—')}</div></div>
       </div>
 
-      <table class="doc-tbl">
-        <thead>
-          <tr>
-            <th style="width:15%">Raw Material</th>
-            <th style="width:15%">Description</th>
-            <th style="width:8%">Unit</th>
-            <th style="width:12%">Composition</th>
-            <th class="num" style="width:10%">Required</th>
-            <th class="num" style="width:22%">Issued</th>
-            <th style="width:18%">Remarks</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
+      ${sectionsHtml}
     </div>`;
 
   // On-screen detail (with print button) + hidden print surface
