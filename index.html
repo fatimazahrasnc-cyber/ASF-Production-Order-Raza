@@ -96,10 +96,12 @@
   /* ── Printable document ── */
   #print-doc { display:none; }
   .doc { background:#fff; color:#111; padding:28px; border:1px solid #e6eaef; border-radius:12px; margin-top:16px; }
-  .doc-head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #111; padding-bottom:14px; margin-bottom:18px; }
+  .doc-head { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; padding-bottom:8px; margin-bottom:0; }
   .doc-head h1 { font-size:22px; letter-spacing:.02em; }
   .doc-head .biz { text-align:right; font-size:12px; color:#444; }
-  .doc-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .doc-sub { font-size:12px; color:#444; margin-top:4px; }
+  .doc-rule { border:none; border-top:1.5px solid #111; margin:6px 0 14px; }
+  .doc-meta { display:grid; grid-template-columns:repeat(5, minmax(120px, 1fr)); gap:12px 18px; margin-bottom:18px; max-width:980px; }
   .doc-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#777; }
   .doc-meta .v { font-size:14px; font-weight:600; }
   table.doc-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:18px; table-layout:fixed; }
@@ -1222,12 +1224,26 @@ function openOrder(idx) {
       </div>`;
   }
 
+  // Header detail fields — first four are omitted when empty
+  const refClean = (it?.reference || it?.text || '').toString().trim();
+  const metaItems = [];
+  if (refClean) metaItems.push(['Reference', esc(refClean)]);
+  if (deliveryDate(it)) metaItems.push(['Delivery Date', fmtDate(deliveryDate(it))]);
+  if (issueDate(it)) metaItems.push(['Issue Sheet Date', fmtDate(issueDate(it))]);
+  if (it?.finishedInventoryItem) metaItems.push(['Finished Item', esc(finishedName)]);
+  metaItems.push(['Finished Qty', num(it?.qty)]);   // always shown
+  const metaHtml = metaItems.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  const descHtml = d.cleanDesc ? `<div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc)}</div></div>` : '';
+  const subParts = [];
+  if (refClean) subParts.push('#' + esc(refClean));
+  if (deliveryDate(it)) subParts.push('Delivery: ' + fmtDate(deliveryDate(it)));
+
   const docHtml = `
     <div class="doc">
       <div class="doc-head">
         <div>
           <h1>Production Order</h1>
-          <div style="font-size:12px;color:#444;margin-top:4px">#${esc(ref)} · Delivery: ${fmtDate(deliveryDate(it))}</div>
+          ${subParts.length ? `<div class="doc-sub">${subParts.join(' · ')}</div>` : ''}
         </div>
         <div class="doc-head-right">
           ${orderImageSrc(it) ? `<img class="doc-image" src="${orderImageSrc(it)}" alt="">` : ''}
@@ -1235,13 +1251,11 @@ function openOrder(idx) {
         </div>
       </div>
 
+      <hr class="doc-rule">
+
       <div class="doc-meta">
-        <div><div class="k">Reference</div><div class="v">${esc(ref)}</div></div>
-        <div><div class="k">Delivery Date</div><div class="v">${fmtDate(deliveryDate(it))}</div></div>
-        <div><div class="k">Issue Sheet Date</div><div class="v">${fmtDate(issueDate(it))}</div></div>
-        <div><div class="k">Finished Item</div><div class="v">${esc(finishedName)}</div></div>
-        <div><div class="k">Finished Qty</div><div class="v">${num(it?.qty)}</div></div>
-        <div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc || '—')}</div></div>
+        ${metaHtml}
+        ${descHtml}
       </div>
 
       ${sectionsHtml}
