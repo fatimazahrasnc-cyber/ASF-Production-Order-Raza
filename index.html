@@ -200,21 +200,18 @@
           <td><input type="date" id="po-delivery"></td>
         </tr>
         <tr>
-          <th>Issue Sheet Date</th>
-          <td>
-            <input type="date" id="po-date">
-            <div class="hint">Stored in the "Issue Sheet Date" custom field.</div>
-          </td>
+          <th>Plan Date</th>
+          <td><input type="date" id="po-date"></td>
         </tr>
         <tr>
-          <th>Reference</th>
+          <th>Batch</th>
           <td>
             <input type="text" id="po-ref" placeholder="Auto: previous + 1">
-            <div class="hint">Auto-filled as the highest existing reference + 1. Editable.</div>
+            <div class="hint">Auto-filled as the highest existing batch number + 1. Editable.</div>
           </td>
         </tr>
         <tr>
-          <th>Finished Inventory Item</th>
+          <th>Article Name</th>
           <td>
             <div class="combo" id="po-finished" data-value="">
               <input type="text" class="combo-input" autocomplete="off" placeholder="Load records first"
@@ -224,11 +221,26 @@
           </td>
         </tr>
         <tr>
-          <th>Finished Qty Produced</th>
-          <td><input type="number" id="po-qty" min="0" step="any" value="1"></td>
+          <th>Finished Qty</th>
+          <td>
+            <input type="number" id="po-qty" min="0" step="any" value="0" readonly>
+            <div class="hint">Linked to Total Pairs from the size table.</div>
+          </td>
         </tr>
         <tr>
-          <th>Description</th>
+          <th>Customer</th>
+          <td><input type="text" id="po-customer" placeholder="(print only)"></td>
+        </tr>
+        <tr>
+          <th>Color</th>
+          <td><input type="text" id="po-color" placeholder="(print only)"></td>
+        </tr>
+        <tr>
+          <th>Shoe Shape</th>
+          <td><input type="text" id="po-shape" placeholder="(print only)"></td>
+        </tr>
+        <tr>
+          <th>PO#</th>
           <td><input type="text" id="po-desc" placeholder="e.g. PO#52059"></td>
         </tr>
       </tbody>
@@ -456,14 +468,15 @@ const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name
 function b64encodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
 function b64decodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
 
-/* v2 format: { v:2, sec:[titles], sz:{size:pairs}, ln:[{ s, r, i, d, c, m }] } aligned to billOfMaterials.
+/* v2 format: { v:2, sec:[titles], sz:{size:pairs}, meta:{cust,col,shp}, ln:[{ s, r, i, d, c, m }] }.
    Older orders may carry a bare array of {r,i,d,c,m} (single-section); still readable. */
-function encodeLineExtras(sectionTitles, lines, sizes) {
+function encodeLineExtras(sectionTitles, lines, sizes, pmeta) {
   const hasAny = lines.some(l => (Number(l.r)||0) || (Number(l.i)||0) || (l.d||'').trim() || (l.c||'').trim() || (l.m||'').trim());
   const hasCustomTitles = (sectionTitles || []).some((t, i) => (t||'').trim() !== (DEFAULT_SECTIONS[i] || '').trim());
   const hasSizes = sizes && Object.keys(sizes).length > 0;
-  if (!hasAny && !hasCustomTitles && !hasSizes) return '';
-  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], sz:sizes || {}, ln:lines }))}\u27E7`; }
+  const hasMeta = pmeta && (pmeta.cust || pmeta.col || pmeta.shp);
+  if (!hasAny && !hasCustomTitles && !hasSizes && !hasMeta) return '';
+  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], sz:sizes || {}, meta:pmeta || {}, ln:lines }))}\u27E7`; }
   catch (e) { return ''; }
 }
 function encodeTag(prefix, map) {
@@ -482,9 +495,9 @@ function parseTagInto(re, clean, target) {
   return clean;
 }
 function parseBudgets(description) {
-  const out = { byIndex:null, sections:null, sizes:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
+  const out = { byIndex:null, sections:null, sizes:null, meta:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
 
-  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles, + sizes), index-aligned
+  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles, + sizes, + meta), index-aligned
   const pm = out.clean.match(POX_RE);
   if (pm) {
     try {
@@ -494,6 +507,7 @@ function parseBudgets(description) {
         out.byIndex = obj.ln;
         out.sections = Array.isArray(obj.sec) ? obj.sec : null;
         out.sizes = (obj.sz && typeof obj.sz === 'object') ? obj.sz : null;
+        out.meta = (obj.meta && typeof obj.meta === 'object') ? obj.meta : null;
       }
     } catch (e) {}
     out.clean = out.clean.replace(POX_RE, '').trim();
@@ -750,6 +764,9 @@ function recalcSizes() {
   document.querySelectorAll('#size-grid .size-in').forEach(i => { total += Number(i.value) || 0; });
   const cell = document.getElementById('size-total');
   if (cell) cell.textContent = total ? num(total) : '0';
+  // Finished Qty is linked to Total Pairs: drive it when any sizes are entered
+  const qty = document.getElementById('po-qty');
+  if (qty && total > 0) qty.value = total;
 }
 function getSizes() {
   const out = {};
@@ -918,9 +935,12 @@ function resetCreateForm() {
   document.getElementById('po-ref').value = INVENTORY.length ? nextReference() : '';
   document.getElementById('po-desc').value = '';
   comboSetValue(document.getElementById('po-finished'), '');
-  document.getElementById('po-qty').value = '1';
-  renderBomSections();          // six fresh, empty department sections
-  setSizes(null);               // clear size breakdown
+  document.getElementById('po-qty').value = '0';
+  document.getElementById('po-customer').value = '';
+  document.getElementById('po-color').value = '';
+  document.getElementById('po-shape').value = '';
+  renderBomSections();          // five fresh, empty department sections
+  setSizes(null);               // clear size breakdown (also resets linked qty)
   PO_IMAGE = ''; renderImagePreview();
   document.getElementById('create-msg').innerHTML = '';
   setToday();
@@ -965,9 +985,12 @@ function editOrder(idx) {
   comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
   document.getElementById('po-qty').value = Number(it?.qty) || 0;
 
-  const { byIndex, sections, sizes, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
+  const { byIndex, sections, sizes, meta, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
   document.getElementById('po-desc').value = clean || '';
-  setSizes(sizes || null);
+  document.getElementById('po-customer').value = (meta && meta.cust) || '';
+  document.getElementById('po-color').value = (meta && meta.col) || '';
+  document.getElementById('po-shape').value = (meta && meta.shp) || '';
+  setSizes(sizes || null);   // if sizes exist, this re-links Finished Qty to Total Pairs
   PO_IMAGE = orderImageSrc(it); renderImagePreview();
 
   // Rebuild the six sections (use saved titles if any), then place each line in its section
@@ -1031,10 +1054,15 @@ function submitProductionOrder() {
   }
   const sectionTitles = getSectionTitles();
   const sizes = getSizes();
+  const pmeta = {
+    cust: (document.getElementById('po-customer')?.value || '').trim(),
+    col:  (document.getElementById('po-color')?.value || '').trim(),
+    shp:  (document.getElementById('po-shape')?.value || '').trim()
+  };
 
   // Validate
   if (!finished) { msg.innerHTML = `<div class="err-box">Please select a finished inventory item.</div>`; return; }
-  if (prodQty <= 0) { msg.innerHTML = `<div class="err-box">Finished qty must be greater than zero.</div>`; return; }
+  if (prodQty <= 0) { msg.innerHTML = `<div class="err-box">Finished Qty is linked to Total Pairs — enter the size breakdown so the total is greater than zero.</div>`; return; }
   if (!bomLines.length) { msg.innerHTML = `<div class="err-box">Add at least one material line in any section.</div>`; return; }
 
   // Reference: use field value, else auto = highest existing + 1
@@ -1042,7 +1070,7 @@ function submitProductionOrder() {
 
   // Description: keep user text clean; append a hidden per-line tag for round-tripping
   const desc = document.getElementById('po-desc').value.trim();
-  const poxTag = encodeLineExtras(sectionTitles, extras, sizes);
+  const poxTag = encodeLineExtras(sectionTitles, extras, sizes, pmeta);
   const fullDesc = [desc, poxTag].filter(Boolean).join(' ').trim();
 
   const issueIso = dateForBackend(document.getElementById('po-date').value);
@@ -1121,7 +1149,7 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { byIndex, sections, sizes, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { byIndex, sections, sizes, meta, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map((l, i) => {
     const key  = l?.billOfMaterials;
@@ -1142,7 +1170,7 @@ function buildOrderDetail(item) {
       remarks: e ? (e.m || '') : ''
     };
   });
-  return { detail, cleanDesc, sections, sizes };
+  return { detail, cleanDesc, sections, sizes, meta };
 }
 
 /* List of production orders */
@@ -1224,16 +1252,20 @@ function openOrder(idx) {
       </div>`;
   }
 
-  // Header detail fields — first four are omitted when empty
+  // Header detail fields — Batch, Delivery Date, Plan Date, Article Name omitted when empty
   const refClean = (it?.reference || it?.text || '').toString().trim();
+  const meta = d.meta || {};
   const metaItems = [];
-  if (refClean) metaItems.push(['Reference', esc(refClean)]);
+  if (refClean) metaItems.push(['Batch', esc(refClean)]);
   if (deliveryDate(it)) metaItems.push(['Delivery Date', fmtDate(deliveryDate(it))]);
-  if (issueDate(it)) metaItems.push(['Issue Sheet Date', fmtDate(issueDate(it))]);
-  if (it?.finishedInventoryItem) metaItems.push(['Finished Item', esc(finishedName)]);
+  if (issueDate(it)) metaItems.push(['Plan Date', fmtDate(issueDate(it))]);
+  if (it?.finishedInventoryItem) metaItems.push(['Article Name', esc(finishedName)]);
   metaItems.push(['Finished Qty', num(it?.qty)]);   // always shown
+  if (meta.cust) metaItems.push(['Customer', esc(meta.cust)]);
+  if (meta.col)  metaItems.push(['Color', esc(meta.col)]);
+  if (meta.shp)  metaItems.push(['Shoe Shape', esc(meta.shp)]);
   const metaHtml = metaItems.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  const descHtml = d.cleanDesc ? `<div style="grid-column:1/-1"><div class="k">Description</div><div class="v">${esc(d.cleanDesc)}</div></div>` : '';
+  const descHtml = d.cleanDesc ? `<div style="grid-column:1/-1"><div class="k">PO#</div><div class="v">${esc(d.cleanDesc)}</div></div>` : '';
   const subParts = [];
   if (refClean) subParts.push('#' + esc(refClean));
   if (deliveryDate(it)) subParts.push('Delivery: ' + fmtDate(deliveryDate(it)));
