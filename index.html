@@ -122,6 +122,23 @@
   .doc-section { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; margin:16px 0 6px; padding-bottom:3px; border-bottom:2px solid #111; }
   .doc-section:first-of-type { margin-top:6px; }
 
+  /* ── Header detail table (label / value) ── */
+  .hdr-layout { display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap; }
+  .hdr-left { flex:1 1 360px; min-width:320px; }
+  .hdr-right { display:flex; flex-direction:column; gap:12px; align-items:flex-start; }
+  table.hdr-table { border-collapse:collapse; width:100%; }
+  table.hdr-table th { text-align:left; width:200px; background:#f6f8fa; border:1px solid #d0d7de; padding:8px 12px; font-size:13px; font-weight:600; color:#24292f; vertical-align:middle; }
+  table.hdr-table td { border:1px solid #d0d7de; padding:5px 8px; vertical-align:middle; }
+  table.hdr-table td input { width:100%; border:1px solid transparent; border-radius:6px; padding:6px 8px; font-size:13px; font-family:inherit; background:transparent; color:#24292f; }
+  table.hdr-table td input:focus { outline:none; border-color:#0969da; box-shadow:0 0 0 3px rgba(9,105,218,.12); background:#fff; }
+  table.hdr-table .hint { margin-top:2px; }
+  table.hdr-table .combo-input { border-color:#d0d7de; }
+
+  /* ── Image custom field ── */
+  .po-image-drop { width:240px; height:130px; border:2px dashed #d0d7de; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#8a929b; font-size:13px; overflow:hidden; background:#fafbfc; text-align:center; }
+  .po-image-drop:hover { border-color:#0969da; color:#0969da; }
+  .po-image-drop img { width:100%; height:100%; object-fit:contain; }
+
   /* ── Size / pairs breakdown ── */
   .blk-label { display:block; font-size:12px; font-weight:600; color:#57606a; margin:16px 0 4px; }
   table.size-grid { border-collapse:collapse; }
@@ -134,6 +151,7 @@
   table.size-print { border-collapse:collapse; }
   table.size-print th, table.size-print td { border:1px solid #111; padding:3px 7px; text-align:center; font-size:11px; min-width:34px; height:20px; }
   table.size-print th { background:#eee; font-weight:700; }
+  .doc-image { max-width:240px; max-height:130px; object-fit:contain; border:1px solid #ccc; }
 
   @media print {
     body * { visibility:hidden; }
@@ -171,60 +189,84 @@
     <p class="sub" id="create-sub">Enter the order details and the <strong>Required</strong> and <strong>Issued</strong> quantity for each raw material, then post it to Manager.</p>
     <div id="edit-banner"></div>
 
-    <div class="grid2">
-      <div class="field">
-        <label>Delivery Date</label>
-        <input type="date" id="po-delivery">
-        <div class="hint">The production order date (Delivery Date).</div>
-      </div>
-      <div class="field">
-        <label>Issue Sheet Date</label>
-        <input type="date" id="po-date">
-        <div class="hint">Stored in the "Issue Sheet Date" custom field.</div>
-      </div>
-      <div class="field">
-        <label>Reference</label>
-        <input type="text" id="po-ref" placeholder="Auto: previous + 1">
-        <div class="hint">Auto-filled as the highest existing reference + 1. Editable.</div>
-      </div>
-      <div class="field">
-        <label>Description</label>
-        <input type="text" id="po-desc" placeholder="e.g. PO#52059">
-      </div>
-      <div class="field">
-        <label>Finished Inventory Item</label>
-        <div class="combo" id="po-finished" data-value="">
-          <input type="text" class="combo-input" autocomplete="off" placeholder="Load records first"
-                 onfocus="comboOpen(this)" oninput="comboFilter(this)" onkeydown="comboKey(event,this)" onblur="comboBlur(this)">
-          <div class="combo-list"></div>
-        </div>
-      </div>
-      <div class="field">
-        <label>Finished Qty Produced</label>
-        <input type="number" id="po-qty" min="0" step="any" value="1">
-      </div>
-    </div>
-
-    <label class="blk-label">Size Breakdown — Pairs per Size (print only, not saved to Manager)</label>
-    <table class="size-grid" id="size-grid">
+    <div class="hdr-layout">
+      <div class="hdr-left">
+    <table class="hdr-table">
       <tbody>
-        <tr><th>36</th><th>37</th><th>38</th><th>39</th><th>40</th></tr>
         <tr>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="36" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="37" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="38" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="39" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="40" oninput="recalcSizes()"></td>
+          <th>Delivery Date</th>
+          <td><input type="date" id="po-delivery"></td>
         </tr>
-        <tr><th>41</th><th>42</th><th>43</th><th colspan="2">Total Pairs</th></tr>
         <tr>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="41" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="42" oninput="recalcSizes()"></td>
-          <td><input type="number" min="0" step="any" class="size-in" data-size="43" oninput="recalcSizes()"></td>
-          <td class="size-total" id="size-total" colspan="2">0</td>
+          <th>Issue Sheet Date</th>
+          <td>
+            <input type="date" id="po-date">
+            <div class="hint">Stored in the "Issue Sheet Date" custom field.</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Reference</th>
+          <td>
+            <input type="text" id="po-ref" placeholder="Auto: previous + 1">
+            <div class="hint">Auto-filled as the highest existing reference + 1. Editable.</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Finished Inventory Item</th>
+          <td>
+            <div class="combo" id="po-finished" data-value="">
+              <input type="text" class="combo-input" autocomplete="off" placeholder="Load records first"
+                     onfocus="comboOpen(this)" oninput="comboFilter(this)" onkeydown="comboKey(event,this)" onblur="comboBlur(this)">
+              <div class="combo-list"></div>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <th>Finished Qty Produced</th>
+          <td><input type="number" id="po-qty" min="0" step="any" value="1"></td>
+        </tr>
+        <tr>
+          <th>Description</th>
+          <td><input type="text" id="po-desc" placeholder="e.g. PO#52059"></td>
         </tr>
       </tbody>
     </table>
+      </div>
+
+      <div class="hdr-right">
+        <div>
+          <label class="blk-label" style="margin-top:0">Image</label>
+          <input type="file" id="po-image-file" accept="image/*" onchange="onImagePicked(event)" style="display:none">
+          <div id="po-image-drop" class="po-image-drop" onclick="document.getElementById('po-image-file').click()">
+            <span>Click to add image</span>
+          </div>
+          <button type="button" class="btn-secondary" id="po-image-clear" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="clearImage()">Remove image</button>
+        </div>
+
+        <div>
+          <label class="blk-label" style="margin-top:0">Size Breakdown — Pairs per Size (print only)</label>
+          <table class="size-grid" id="size-grid">
+            <tbody>
+              <tr><th>36</th><th>37</th><th>38</th><th>39</th><th>40</th></tr>
+              <tr>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="36" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="37" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="38" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="39" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="40" oninput="recalcSizes()"></td>
+              </tr>
+              <tr><th>41</th><th>42</th><th>43</th><th colspan="2">Total Pairs</th></tr>
+              <tr>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="41" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="42" oninput="recalcSizes()"></td>
+                <td><input type="number" min="0" step="any" class="size-in" data-size="43" oninput="recalcSizes()"></td>
+                <td class="size-total" id="size-total" colspan="2">0</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
     <h2 style="margin-top:22px;font-size:14px">Bill of Materials (raw materials)</h2>
     <div id="bom-sections"></div>
@@ -358,6 +400,9 @@ let EDIT_ITEM  = null;       // original item being edited (to preserve untouche
 
 // "Issue Sheet Date" custom field — used as the order date instead of the native date
 const ISSUE_DATE_KEY = '019ef39a-2cad-7697-bc07-6d4bc9ce1e36';
+// Image custom field key (saved to customFields2.images on the production order)
+const IMAGE_KEY = '019f06a8-529d-721f-b3d8-e211c9b9d6e3';
+let PO_IMAGE = '';   // current form image as a data URL (empty = none)
 
 const num = v => (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits:4 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -365,6 +410,24 @@ function fmtDate(d) {
   if (!d) return '—';
   const dt = new Date(d);
   return isNaN(dt) ? esc(d) : dt.toLocaleDateString('en-GB', { year:'numeric', month:'short', day:'numeric' });
+}
+/* Today's calendar date as YYYY-MM-DD using LOCAL components (no UTC shift) */
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+/* Convert any stored date value to a YYYY-MM-DD for a <input type=date>, using LOCAL
+   components so an order saved at local midnight is not pushed to the previous day. */
+function toDateInput(d) {
+  if (!d) return todayStr();
+  const dt = new Date(d);
+  if (isNaN(dt)) return String(d).slice(0,10);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+/* Store a date input value as a local-midnight stamp WITHOUT timezone conversion
+   (matches Manager's "YYYY-MM-DDT00:00:00" format and avoids the off-by-one). */
+function dateForBackend(val) {
+  return (val && /^\d{4}-\d{2}-\d{2}$/.test(val)) ? val + 'T00:00:00' : todayStr() + 'T00:00:00';
 }
 /* Order date = Issue Sheet Date custom field, falling back to the native date */
 function orderDate(it) {
@@ -714,6 +777,64 @@ function sizeTablePrintHtml(sz) {
     </table>`;
 }
 
+/* ── Image custom field helpers ── */
+/* Read the order's image custom field into a displayable src (handles data URL,
+   raw base64, or common object shapes returned by the backend). */
+function orderImageSrc(it) {
+  const img = it?.customFields2?.images?.[IMAGE_KEY];
+  if (!img) return '';
+  if (typeof img === 'string') return img.startsWith('data:') ? img : ('data:image/png;base64,' + img);
+  if (typeof img === 'object') {
+    const b = img.dataUrl || img.url || img.base64 || img.data || img.value;
+    if (typeof b === 'string') return b.startsWith('data:') ? b : ('data:image/png;base64,' + b);
+  }
+  return '';
+}
+/* Show current PO_IMAGE in the form drop zone */
+function renderImagePreview() {
+  const drop = document.getElementById('po-image-drop');
+  const clr  = document.getElementById('po-image-clear');
+  if (!drop) return;
+  if (PO_IMAGE) {
+    drop.innerHTML = `<img src="${PO_IMAGE}" alt="order image">`;
+    if (clr) clr.style.display = '';
+  } else {
+    drop.innerHTML = `<span>Click to add image</span>`;
+    if (clr) clr.style.display = 'none';
+  }
+}
+/* Read + downscale a chosen image to bound payload size, store as data URL */
+function onImagePicked(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 800;
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const k = Math.min(maxDim / width, maxDim / height);
+        width = Math.round(width * k); height = Math.round(height * k);
+      }
+      try {
+        const c = document.createElement('canvas');
+        c.width = width; c.height = height;
+        c.getContext('2d').drawImage(img, 0, 0, width, height);
+        PO_IMAGE = c.toDataURL('image/jpeg', 0.85);
+      } catch (e) {
+        PO_IMAGE = reader.result;   // fallback to original
+      }
+      renderImagePreview();
+    };
+    img.onerror = () => { PO_IMAGE = reader.result; renderImagePreview(); };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+  ev.target.value = '';   // allow re-picking the same file later
+}
+function clearImage() { PO_IMAGE = ''; renderImagePreview(); }
+
 function sectionColsHtml() {
   return `
     <thead>
@@ -798,12 +919,13 @@ function resetCreateForm() {
   document.getElementById('po-qty').value = '1';
   renderBomSections();          // six fresh, empty department sections
   setSizes(null);               // clear size breakdown
+  PO_IMAGE = ''; renderImagePreview();
   document.getElementById('create-msg').innerHTML = '';
   setToday();
 }
 
 function setToday() {
-  const t = new Date().toISOString().slice(0,10);
+  const t = todayStr();
   document.getElementById('po-date').value = t;
   document.getElementById('po-delivery').value = t;
 }
@@ -833,11 +955,9 @@ function editOrder(idx) {
     `<div class="ok-box">Editing order #${esc(it?.reference || it?.text || '')}. Changes will be saved back to Manager. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel edit</button></div>`;
   document.getElementById('post-btn').textContent = 'Update Production Order';
 
-  // Delivery Date = native order date; Issue Sheet Date = custom field
-  const dDel = deliveryDate(it);
-  const dIss = issueDate(it);
-  document.getElementById('po-delivery').value = dDel ? new Date(dDel).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
-  document.getElementById('po-date').value = dIss ? new Date(dIss).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  // Delivery Date = native order date; Issue Sheet Date = custom field (local, no UTC shift)
+  document.getElementById('po-delivery').value = toDateInput(deliveryDate(it));
+  document.getElementById('po-date').value = toDateInput(issueDate(it));
 
   document.getElementById('po-ref').value = it?.reference ?? it?.text ?? '';
   comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
@@ -846,6 +966,7 @@ function editOrder(idx) {
   const { byIndex, sections, sizes, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
   document.getElementById('po-desc').value = clean || '';
   setSizes(sizes || null);
+  PO_IMAGE = orderImageSrc(it); renderImagePreview();
 
   // Rebuild the six sections (use saved titles if any), then place each line in its section
   renderBomSections(sections || null);
@@ -922,14 +1043,17 @@ function submitProductionOrder() {
   const poxTag = encodeLineExtras(sectionTitles, extras, sizes);
   const fullDesc = [desc, poxTag].filter(Boolean).join(' ').trim();
 
-  const issueVal = document.getElementById('po-date').value;
-  const issueIso = issueVal ? new Date(issueVal + 'T00:00:00').toISOString() : new Date().toISOString();
-  const delVal = document.getElementById('po-delivery').value;
-  const deliveryIso = delVal ? new Date(delVal + 'T00:00:00').toISOString() : issueIso;
+  const issueIso = dateForBackend(document.getElementById('po-date').value);
+  const deliveryIso = dateForBackend(document.getElementById('po-delivery').value);
 
   // Preserve any existing customFields2 sub-objects, then set the Issue Sheet Date custom field
   const baseCF2 = (EDIT_ITEM && EDIT_ITEM.customFields2) ? { ...EDIT_ITEM.customFields2 } : { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null };
   baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: issueIso };
+
+  // Image custom field: set when an image is present, remove the key when cleared
+  const imgs = { ...(baseCF2.images || {}) };
+  if (PO_IMAGE) imgs[IMAGE_KEY] = PO_IMAGE; else delete imgs[IMAGE_KEY];
+  baseCF2.images = Object.keys(imgs).length ? imgs : null;
 
   // Build the order value — start from the original on edit to keep untouched fields intact
   const base = EDIT_ITEM ? { ...EDIT_ITEM } : {};
@@ -1106,6 +1230,7 @@ function openOrder(idx) {
           <div style="font-size:12px;color:#444;margin-top:4px">#${esc(ref)} · Delivery: ${fmtDate(deliveryDate(it))}</div>
         </div>
         <div class="doc-head-right">
+          ${orderImageSrc(it) ? `<img class="doc-image" src="${orderImageSrc(it)}" alt="">` : ''}
           ${sizeTablePrintHtml(d.sizes)}
         </div>
       </div>
