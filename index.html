@@ -122,6 +122,19 @@
   .doc-section { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; margin:16px 0 6px; padding-bottom:3px; border-bottom:2px solid #111; }
   .doc-section:first-of-type { margin-top:6px; }
 
+  /* ── Size / pairs breakdown ── */
+  .blk-label { display:block; font-size:12px; font-weight:600; color:#57606a; margin:16px 0 4px; }
+  table.size-grid { border-collapse:collapse; }
+  table.size-grid th, table.size-grid td { border:1px solid #d0d7de; padding:3px 6px; text-align:center; font-size:13px; min-width:52px; }
+  table.size-grid th { background:#f6f8fa; font-weight:700; }
+  table.size-grid .size-in { width:54px; border:none; text-align:center; font-size:13px; padding:5px 2px; background:transparent; }
+  table.size-grid .size-in:focus { outline:none; background:#eef5ff; }
+  table.size-grid .size-total { font-weight:700; background:#f6f8fa; }
+  .doc-head-right { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+  table.size-print { border-collapse:collapse; }
+  table.size-print th, table.size-print td { border:1px solid #111; padding:3px 7px; text-align:center; font-size:11px; min-width:34px; height:20px; }
+  table.size-print th { background:#eee; font-weight:700; }
+
   @media print {
     body * { visibility:hidden; }
     #print-doc, #print-doc * { visibility:visible; }
@@ -191,6 +204,27 @@
         <input type="number" id="po-qty" min="0" step="any" value="1">
       </div>
     </div>
+
+    <label class="blk-label">Size Breakdown — Pairs per Size (print only, not saved to Manager)</label>
+    <table class="size-grid" id="size-grid">
+      <tbody>
+        <tr><th>36</th><th>37</th><th>38</th><th>39</th><th>40</th></tr>
+        <tr>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="36" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="37" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="38" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="39" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="40" oninput="recalcSizes()"></td>
+        </tr>
+        <tr><th>41</th><th>42</th><th>43</th><th colspan="2">Total Pairs</th></tr>
+        <tr>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="41" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="42" oninput="recalcSizes()"></td>
+          <td><input type="number" min="0" step="any" class="size-in" data-size="43" oninput="recalcSizes()"></td>
+          <td class="size-total" id="size-total" colspan="2">0</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2 style="margin-top:22px;font-size:14px">Bill of Materials (raw materials)</h2>
     <div id="bom-sections"></div>
@@ -357,13 +391,14 @@ const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name
 function b64encodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
 function b64decodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
 
-/* v2 format: { v:2, sec:[titles], ln:[{ s, r, i, d, c, m }] } aligned to billOfMaterials.
+/* v2 format: { v:2, sec:[titles], sz:{size:pairs}, ln:[{ s, r, i, d, c, m }] } aligned to billOfMaterials.
    Older orders may carry a bare array of {r,i,d,c,m} (single-section); still readable. */
-function encodeLineExtras(sectionTitles, lines) {
+function encodeLineExtras(sectionTitles, lines, sizes) {
   const hasAny = lines.some(l => (Number(l.r)||0) || (Number(l.i)||0) || (l.d||'').trim() || (l.c||'').trim() || (l.m||'').trim());
   const hasCustomTitles = (sectionTitles || []).some((t, i) => (t||'').trim() !== (DEFAULT_SECTIONS[i] || '').trim());
-  if (!hasAny && !hasCustomTitles) return '';
-  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], ln:lines }))}\u27E7`; }
+  const hasSizes = sizes && Object.keys(sizes).length > 0;
+  if (!hasAny && !hasCustomTitles && !hasSizes) return '';
+  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], sz:sizes || {}, ln:lines }))}\u27E7`; }
   catch (e) { return ''; }
 }
 function encodeTag(prefix, map) {
@@ -382,15 +417,19 @@ function parseTagInto(re, clean, target) {
   return clean;
 }
 function parseBudgets(description) {
-  const out = { byIndex:null, sections:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
+  const out = { byIndex:null, sections:null, sizes:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
 
-  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles), index-aligned
+  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles, + sizes), index-aligned
   const pm = out.clean.match(POX_RE);
   if (pm) {
     try {
       const obj = JSON.parse(b64decodeUnicode(pm[1]));
       if (Array.isArray(obj)) { out.byIndex = obj; }                          // v1: bare array, single section
-      else if (obj && Array.isArray(obj.ln)) { out.byIndex = obj.ln; out.sections = Array.isArray(obj.sec) ? obj.sec : null; }
+      else if (obj && Array.isArray(obj.ln)) {
+        out.byIndex = obj.ln;
+        out.sections = Array.isArray(obj.sec) ? obj.sec : null;
+        out.sizes = (obj.sz && typeof obj.sz === 'object') ? obj.sz : null;
+      }
     } catch (e) {}
     out.clean = out.clean.replace(POX_RE, '').trim();
   }
@@ -636,8 +675,44 @@ function switchTab(name) {
    Each material line records its section index so the order
    regroups correctly on edit and print.
 ══════════════════════════════════ */
-const DEFAULT_SECTIONS = ['CUTTING', 'CLOSING', 'IN/OUT SOLE', 'LASTING & FINISHING', '', 'COSTING & PLANNING DEPARTMENT'];
+const DEFAULT_SECTIONS = ['CUTTING', 'CLOSING', 'IN/OUT SOLE', 'LASTING & FINISHING', 'COSTING & PLANNING DEPARTMENT'];
 const SECTION_COUNT = DEFAULT_SECTIONS.length;
+
+/* Print-only size breakdown */
+const SIZES = ['36','37','38','39','40','41','42','43'];
+function recalcSizes() {
+  let total = 0;
+  document.querySelectorAll('#size-grid .size-in').forEach(i => { total += Number(i.value) || 0; });
+  const cell = document.getElementById('size-total');
+  if (cell) cell.textContent = total ? num(total) : '0';
+}
+function getSizes() {
+  const out = {};
+  document.querySelectorAll('#size-grid .size-in').forEach(i => {
+    const v = Number(i.value) || 0;
+    if (v > 0) out[i.dataset.size] = v;
+  });
+  return out;
+}
+function setSizes(sz) {
+  document.querySelectorAll('#size-grid .size-in').forEach(i => {
+    const v = sz && Number(sz[i.dataset.size]) ? Number(sz[i.dataset.size]) : '';
+    i.value = v || '';
+  });
+  recalcSizes();
+}
+function sizeTablePrintHtml(sz) {
+  const v = s => { const n = Number(sz && sz[s]) || 0; return n > 0 ? num(n) : ''; };
+  const total = SIZES.reduce((t, s) => t + (Number(sz && sz[s]) || 0), 0);
+  const r1 = ['36','37','38','39','40'], r2 = ['41','42','43'];
+  return `
+    <table class="size-print">
+      <tr>${r1.map(s => `<th>${s}</th>`).join('')}</tr>
+      <tr>${r1.map(s => `<td>${v(s)}</td>`).join('')}</tr>
+      <tr>${r2.map(s => `<th>${s}</th>`).join('')}<th colspan="2">Total Pairs</th></tr>
+      <tr>${r2.map(s => `<td>${v(s)}</td>`).join('')}<td colspan="2">${total > 0 ? num(total) : ''}</td></tr>
+    </table>`;
+}
 
 function sectionColsHtml() {
   return `
@@ -722,6 +797,7 @@ function resetCreateForm() {
   comboSetValue(document.getElementById('po-finished'), '');
   document.getElementById('po-qty').value = '1';
   renderBomSections();          // six fresh, empty department sections
+  setSizes(null);               // clear size breakdown
   document.getElementById('create-msg').innerHTML = '';
   setToday();
 }
@@ -767,8 +843,9 @@ function editOrder(idx) {
   comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
   document.getElementById('po-qty').value = Number(it?.qty) || 0;
 
-  const { byIndex, sections, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
+  const { byIndex, sections, sizes, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
   document.getElementById('po-desc').value = clean || '';
+  setSizes(sizes || null);
 
   // Rebuild the six sections (use saved titles if any), then place each line in its section
   renderBomSections(sections || null);
@@ -779,7 +856,7 @@ function editOrder(idx) {
     const required = e ? (Number(e.r) || 0) : ((Number(map[key]) || 0) || (Number(nameMap[NAME_MAP[key]]) || 0));
     const issued   = e ? (Number(e.i) || 0) : (Number(actualMap[key]) || 0);
     let s = (e && Number.isInteger(e.s)) ? e.s : 0;
-    if (s < 0 || s >= SECTION_COUNT) s = 0;
+    s = Math.max(0, Math.min(SECTION_COUNT - 1, s));
     addBomLine(s, {
       key,
       description: e ? (e.d || '') : '',
@@ -830,6 +907,7 @@ function submitProductionOrder() {
     });
   }
   const sectionTitles = getSectionTitles();
+  const sizes = getSizes();
 
   // Validate
   if (!finished) { msg.innerHTML = `<div class="err-box">Please select a finished inventory item.</div>`; return; }
@@ -841,7 +919,7 @@ function submitProductionOrder() {
 
   // Description: keep user text clean; append a hidden per-line tag for round-tripping
   const desc = document.getElementById('po-desc').value.trim();
-  const poxTag = encodeLineExtras(sectionTitles, extras);
+  const poxTag = encodeLineExtras(sectionTitles, extras, sizes);
   const fullDesc = [desc, poxTag].filter(Boolean).join(' ').trim();
 
   const issueVal = document.getElementById('po-date').value;
@@ -917,7 +995,7 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { byIndex, sections, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { byIndex, sections, sizes, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map((l, i) => {
     const key  = l?.billOfMaterials;
@@ -926,7 +1004,7 @@ function buildOrderDetail(item) {
     const required = e ? (Number(e.r) || 0) : ((Number(budgetMap[key]) || 0) || (Number(nameMap[name]) || 0));
     const issued   = e ? (Number(e.i) || 0) : (Number(actualMap[key]) || 0);
     let s = (e && Number.isInteger(e.s)) ? e.s : 0;
-    if (s < 0 || s >= SECTION_COUNT) s = 0;
+    s = Math.max(0, Math.min(SECTION_COUNT - 1, s));
     return {
       section: s,
       name,
@@ -938,7 +1016,7 @@ function buildOrderDetail(item) {
       remarks: e ? (e.m || '') : ''
     };
   });
-  return { detail, cleanDesc, sections };
+  return { detail, cleanDesc, sections, sizes };
 }
 
 /* List of production orders */
@@ -1023,10 +1101,12 @@ function openOrder(idx) {
   const docHtml = `
     <div class="doc">
       <div class="doc-head">
-        <h1>Production Order</h1>
-        <div class="biz">
-          <div><strong>Production Order #${esc(ref)}</strong></div>
-          <div>Delivery: ${fmtDate(deliveryDate(it))}</div>
+        <div>
+          <h1>Production Order</h1>
+          <div style="font-size:12px;color:#444;margin-top:4px">#${esc(ref)} · Delivery: ${fmtDate(deliveryDate(it))}</div>
+        </div>
+        <div class="doc-head-right">
+          ${sizeTablePrintHtml(d.sizes)}
         </div>
       </div>
 
