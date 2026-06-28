@@ -804,17 +804,45 @@ function sizeTablePrintHtml(sz) {
 }
 
 /* ── Image custom field helpers ── */
-/* Read the order's image custom field into a displayable src (handles data URL,
-   raw base64, or common object shapes returned by the backend). */
-function orderImageSrc(it) {
-  const img = it?.customFields2?.images?.[IMAGE_KEY];
-  if (!img) return '';
-  if (typeof img === 'string') return img.startsWith('data:') ? img : ('data:image/png;base64,' + img);
-  if (typeof img === 'object') {
-    const b = img.dataUrl || img.url || img.base64 || img.data || img.value;
-    if (typeof b === 'string') return b.startsWith('data:') ? b : ('data:image/png;base64,' + b);
+/* Turn a raw base64 (no prefix) into a data URL, detecting type from magic bytes */
+function b64ToDataUrl(b64, hint) {
+  const s = String(b64).replace(/\s+/g, '');
+  let mime = 'image/png';
+  if (s.startsWith('/9j/')) mime = 'image/jpeg';
+  else if (s.startsWith('iVBOR')) mime = 'image/png';
+  else if (s.startsWith('R0lGOD')) mime = 'image/gif';
+  else if (s.startsWith('UklGR')) mime = 'image/webp';
+  else if (hint) {
+    const h = String(hint).toLowerCase();
+    if (h.includes('jpg') || h.includes('jpeg')) mime = 'image/jpeg';
+    else if (h.includes('gif')) mime = 'image/gif';
+    else if (h.includes('webp')) mime = 'image/webp';
+  }
+  return 'data:' + mime + ';base64,' + s;
+}
+/* Coerce any value Manager might return for an image field into a displayable src */
+function imgValueToSrc(v) {
+  if (!v) return '';
+  if (typeof v === 'string') return v.startsWith('data:') ? v : b64ToDataUrl(v);
+  if (Array.isArray(v)) { for (const x of v) { const s = imgValueToSrc(x); if (s) return s; } return ''; }
+  if (typeof v === 'object') {
+    const hint = v.contentType || v.mimeType || v.type || v.name || v.fileName || '';
+    for (const k of ['dataUrl', 'dataURL', 'url', 'href', 'src', 'base64', 'data', 'content', 'bytes', 'value', 'image']) {
+      if (typeof v[k] === 'string' && v[k]) return v[k].startsWith('data:') ? v[k] : b64ToDataUrl(v[k], hint);
+    }
+    // Fallback: any long string value on the object is probably the image data
+    for (const k in v) { if (typeof v[k] === 'string' && v[k].length > 100) return v[k].startsWith('data:') ? v[k] : b64ToDataUrl(v[k], hint); }
   }
   return '';
+}
+/* Read the order's image custom field from either customFields2 or legacy customFields */
+function orderImageSrc(it) {
+  const cf2 = it?.customFields2?.images;
+  const cf1 = it?.customFields?.images;
+  let src = '';
+  if (cf2 && typeof cf2 === 'object') src = imgValueToSrc(cf2[IMAGE_KEY]) || imgValueToSrc(Object.values(cf2)[0]);
+  if (!src && cf1 && typeof cf1 === 'object') src = imgValueToSrc(cf1[IMAGE_KEY]) || imgValueToSrc(Object.values(cf1)[0]);
+  return src;
 }
 /* Show current PO_IMAGE in the form drop zone */
 function renderImagePreview() {
@@ -1240,6 +1268,9 @@ function openOrder(idx) {
   let sectionsHtml = '';
   for (let i = 0; i < SECTION_COUNT; i++) {
     const items = d.detail.filter(m => m.section === i);
+    // First four departments (Cutting, Closing, In/Out Sole, Lasting & Finishing) are
+    // omitted from the printout when they have no material lines.
+    if (i < 4 && items.length === 0) continue;
     const rows = items.length
       ? items.map(m => `
         <tr>
