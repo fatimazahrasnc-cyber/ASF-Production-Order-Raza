@@ -96,14 +96,18 @@
   /* ── Printable document ── */
   #print-doc { display:none; }
   .doc { background:#fff; color:#111; padding:28px; border:1px solid #e6eaef; border-radius:12px; margin-top:16px; }
-  .doc-head { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; padding-bottom:8px; margin-bottom:0; }
-  .doc-head h1 { font-size:22px; letter-spacing:.02em; }
-  .doc-head .biz { text-align:right; font-size:12px; color:#444; }
-  .doc-sub { font-size:12px; color:#444; margin-top:4px; }
-  .doc-rule { border:none; border-top:1.5px solid #111; margin:6px 0 14px; }
-  .doc-meta { display:grid; grid-template-columns:repeat(5, minmax(120px, 1fr)); gap:12px 18px; margin-bottom:18px; max-width:980px; }
-  .doc-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#777; }
-  .doc-meta .v { font-size:14px; font-weight:600; }
+  .po-title { font-size:20px; letter-spacing:.02em; margin-bottom:12px; }
+  .po-top { display:flex; justify-content:space-between; align-items:flex-start; gap:28px; margin-bottom:20px; flex-wrap:wrap; }
+  .po-top-left { flex:0 0 auto; }
+  .po-top-right { flex:0 0 auto; width:300px; }
+  table.detail-table { border-collapse:collapse; width:360px; }
+  table.detail-table th { text-align:left; width:135px; border:1px solid #222; padding:7px 10px; font-size:13px; font-weight:700; background:#fff; }
+  table.detail-table td { border:1px solid #222; padding:7px 10px; font-size:13px; height:16px; font-weight:600; }
+  .po-image-box { width:100%; height:88px; border:1px solid #222; display:flex; align-items:center; justify-content:center; overflow:hidden; margin-bottom:8px; }
+  .po-image-box img { max-width:100%; max-height:100%; object-fit:contain; }
+  table.size-print { border-collapse:collapse; width:100%; table-layout:fixed; }
+  table.size-print th, table.size-print td { border:1px solid #222; padding:5px 4px; text-align:center; font-size:12px; height:24px; }
+  table.size-print th { background:#e9e9e9; font-weight:700; }
   table.doc-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:18px; table-layout:fixed; }
   table.doc-tbl th { background:#f3f5f7; text-align:left; padding:7px 6px; font-size:11px; font-weight:700; text-transform:none; letter-spacing:0; border:1px solid #ccc; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:bottom; }
   table.doc-tbl td { padding:7px 6px; border:1px solid #ddd; white-space:normal; overflow-wrap:anywhere; word-break:break-word; vertical-align:top; height:30px; }
@@ -149,11 +153,6 @@
   table.size-grid .size-in { width:54px; border:none; text-align:center; font-size:13px; padding:5px 2px; background:transparent; }
   table.size-grid .size-in:focus { outline:none; background:#eef5ff; }
   table.size-grid .size-total { font-weight:700; background:#f6f8fa; }
-  .doc-head-right { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
-  table.size-print { border-collapse:collapse; }
-  table.size-print th, table.size-print td { border:1px solid #111; padding:3px 7px; text-align:center; font-size:11px; min-width:34px; height:20px; }
-  table.size-print th { background:#eee; font-weight:700; }
-  .doc-image { max-width:240px; max-height:130px; object-fit:contain; border:1px solid #ccc; }
 
   @media print {
     body * { visibility:hidden; }
@@ -1255,39 +1254,29 @@ function openOrder(idx) {
   // Header detail fields — Batch, Delivery Date, Plan Date, Article Name omitted when empty
   const refClean = (it?.reference || it?.text || '').toString().trim();
   const meta = d.meta || {};
-  const metaItems = [];
-  if (refClean) metaItems.push(['Batch', esc(refClean)]);
-  if (deliveryDate(it)) metaItems.push(['Delivery Date', fmtDate(deliveryDate(it))]);
-  if (issueDate(it)) metaItems.push(['Plan Date', fmtDate(issueDate(it))]);
-  if (it?.finishedInventoryItem) metaItems.push(['Article Name', esc(finishedName)]);
-  metaItems.push(['Finished Qty', num(it?.qty)]);   // always shown
-  if (meta.cust) metaItems.push(['Customer', esc(meta.cust)]);
-  if (meta.col)  metaItems.push(['Color', esc(meta.col)]);
-  if (meta.shp)  metaItems.push(['Shoe Shape', esc(meta.shp)]);
-  const metaHtml = metaItems.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  const descHtml = d.cleanDesc ? `<div style="grid-column:1/-1"><div class="k">PO#</div><div class="v">${esc(d.cleanDesc)}</div></div>` : '';
-  const subParts = [];
-  if (refClean) subParts.push('#' + esc(refClean));
-  if (deliveryDate(it)) subParts.push('Delivery: ' + fmtDate(deliveryDate(it)));
+
+  // Left detail table (fixed rows, matching the print spec)
+  const detailRows = [
+    ['Batch',         esc(refClean)],
+    ['Article Name',  it?.finishedInventoryItem ? esc(finishedName) : ''],
+    ['Customer',      esc(meta.cust || '')],
+    ['Color',         esc(meta.col || '')],
+    ['Shoe Shape',    esc(meta.shp || '')],
+    ['Plan Date',     issueDate(it) ? fmtDate(issueDate(it)) : ''],
+    ['Delivery Date', deliveryDate(it) ? fmtDate(deliveryDate(it)) : '']
+  ].map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
 
   const docHtml = `
     <div class="doc">
-      <div class="doc-head">
-        <div>
-          <h1>Production Order</h1>
-          ${subParts.length ? `<div class="doc-sub">${subParts.join(' · ')}</div>` : ''}
+      <h1 class="po-title">Production Order${refClean ? ' — ' + esc(refClean) : ''}</h1>
+      <div class="po-top">
+        <div class="po-top-left">
+          <table class="detail-table"><tbody>${detailRows}</tbody></table>
         </div>
-        <div class="doc-head-right">
-          ${orderImageSrc(it) ? `<img class="doc-image" src="${orderImageSrc(it)}" alt="">` : ''}
+        <div class="po-top-right">
+          <div class="po-image-box">${orderImageSrc(it) ? `<img src="${orderImageSrc(it)}" alt="">` : ''}</div>
           ${sizeTablePrintHtml(d.sizes)}
         </div>
-      </div>
-
-      <hr class="doc-rule">
-
-      <div class="doc-meta">
-        ${metaHtml}
-        ${descHtml}
       </div>
 
       ${sectionsHtml}
