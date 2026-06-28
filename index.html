@@ -422,6 +422,10 @@ let EDIT_ITEM  = null;       // original item being edited (to preserve untouche
 const ISSUE_DATE_KEY = '019ef39a-2cad-7697-bc07-6d4bc9ce1e36';
 // Image custom field key (saved to customFields2.images on the production order)
 const IMAGE_KEY = '019f06a8-529d-721f-b3d8-e211c9b9d6e3';
+// OPTIONAL: a multi-line Text custom field key to hold the extension's print-only data
+// (sizes, sections, per-line extras, customer/color/shape). When set, the data is stored
+// there and the Manager Description stays clean. Leave '' to fall back to the description.
+const DATA_FIELD_KEY = '019f0c43-4be2-72b1-a913-9b753c5d6eb0';
 let PO_IMAGE = '';   // current form image as a data URL (empty = none)
 
 const num = v => (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits:4 });
@@ -474,15 +478,32 @@ const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name
 function b64encodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
 function b64decodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
 
-/* v2 format: { v:2, sec:[titles], sz:{size:pairs}, meta:{cust,col,shp}, ln:[{ s, r, i, d, c, m }] }.
-   Older orders may carry a bare array of {r,i,d,c,m} (single-section); still readable. */
-function encodeLineExtras(sectionTitles, lines, sizes, pmeta) {
+/* v2 format: { v:2, sec?, sz?, meta?, ln:[{ s, r?, i?, d?, c?, m? }] }, only including
+   non-default / non-empty parts to keep the stored blob small. Older orders may carry a
+   bare array of {r,i,d,c,m} (single-section); still readable. */
+function encodeLineExtras(sectionTitles, lines, sizes, pmeta, imageRaw) {
   const hasAny = lines.some(l => (Number(l.r)||0) || (Number(l.i)||0) || (l.d||'').trim() || (l.c||'').trim() || (l.m||'').trim());
   const hasCustomTitles = (sectionTitles || []).some((t, i) => (t||'').trim() !== (DEFAULT_SECTIONS[i] || '').trim());
   const hasSizes = sizes && Object.keys(sizes).length > 0;
   const hasMeta = pmeta && (pmeta.cust || pmeta.col || pmeta.shp);
-  if (!hasAny && !hasCustomTitles && !hasSizes && !hasMeta) return '';
-  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify({ v:2, sec:sectionTitles || [], sz:sizes || {}, meta:pmeta || {}, ln:lines }))}\u27E7`; }
+  const hasImage = !!imageRaw;
+  if (!hasAny && !hasCustomTitles && !hasSizes && !hasMeta && !hasImage) return '';
+  // Trim each line to only its populated fields (section index always kept for grouping)
+  const ln = lines.map(l => {
+    const o = { s: l.s || 0 };
+    if (Number(l.r)) o.r = Number(l.r);
+    if (Number(l.i)) o.i = Number(l.i);
+    if ((l.d || '').trim()) o.d = l.d;
+    if ((l.c || '').trim()) o.c = l.c;
+    if ((l.m || '').trim()) o.m = l.m;
+    return o;
+  });
+  const obj = { v: 2, ln };
+  if (hasCustomTitles) obj.sec = sectionTitles;
+  if (hasSizes) obj.sz = sizes;
+  if (hasMeta) obj.meta = pmeta;
+  if (hasImage) obj.img = imageRaw;   // raw base64 (no data: prefix)
+  try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify(obj))}\u27E7`; }
   catch (e) { return ''; }
 }
 function encodeTag(prefix, map) {
@@ -500,11 +521,16 @@ function parseTagInto(re, clean, target) {
   }
   return clean;
 }
-function parseBudgets(description) {
-  const out = { byIndex:null, sections:null, sizes:null, meta:null, map:{}, actualMap:{}, nameMap:{}, clean:(description || '').toString() };
+function parseBudgets(itemOrDesc) {
+  // Accept either the order item (preferred) or a plain description string
+  const isItem = itemOrDesc && typeof itemOrDesc === 'object';
+  const desc = isItem ? (itemOrDesc.description || '').toString() : (itemOrDesc || '').toString();
+  const out = { byIndex:null, sections:null, sizes:null, meta:null, image:null, map:{}, actualMap:{}, nameMap:{}, clean: desc };
 
-  // Current format: ⟦POX:base64 JSON⟧ — full per-line data (+ section titles, + sizes, + meta), index-aligned
-  const pm = out.clean.match(POX_RE);
+  // POX may live in a dedicated Text custom field (keeps Description clean) or in the description
+  const fieldData = (isItem && DATA_FIELD_KEY) ? (itemOrDesc?.customFields2?.strings?.[DATA_FIELD_KEY] || '') : '';
+  const poxSource = fieldData || out.clean;
+  const pm = poxSource.match(POX_RE);
   if (pm) {
     try {
       const obj = JSON.parse(b64decodeUnicode(pm[1]));
@@ -514,9 +540,11 @@ function parseBudgets(description) {
         out.sections = Array.isArray(obj.sec) ? obj.sec : null;
         out.sizes = (obj.sz && typeof obj.sz === 'object') ? obj.sz : null;
         out.meta = (obj.meta && typeof obj.meta === 'object') ? obj.meta : null;
+        out.image = obj.img ? imgValueToSrc(obj.img) : null;
       }
     } catch (e) {}
-    out.clean = out.clean.replace(POX_RE, '').trim();
+    // Strip the tag from the description only if that's where it was
+    if (!fieldData) out.clean = out.clean.replace(POX_RE, '').trim();
   }
 
   // Older formats: ⟦BUD:uuid=qty|…⟧ and ⟦AQI:uuid=qty|…⟧ (keyed by material UUID)
@@ -887,27 +915,32 @@ function onImagePicked(ev) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    const img = new Image();
-    img.onload = () => {
-      const maxDim = 800;
-      let { width, height } = img;
-      if (width > maxDim || height > maxDim) {
-        const k = Math.min(maxDim / width, maxDim / height);
-        width = Math.round(width * k); height = Math.round(height * k);
-      }
-      try {
-        const c = document.createElement('canvas');
-        c.width = width; c.height = height;
-        c.getContext('2d').drawImage(img, 0, 0, width, height);
-        PO_IMAGE = c.toDataURL('image/jpeg', 0.85);
-      } catch (e) {
-        PO_IMAGE = reader.result;   // fallback to original
-      }
-      renderImagePreview();
-    };
-    img.onerror = () => { PO_IMAGE = reader.result; renderImagePreview(); };
-    img.src = reader.result;
+    // Capture the original immediately so the pick always works, even if downscaling fails
+    PO_IMAGE = reader.result;
+    renderImagePreview();
+    // Best-effort downscale to keep the payload small (non-blocking)
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 800;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            const k = Math.min(maxDim / width, maxDim / height);
+            width = Math.round(width * k); height = Math.round(height * k);
+          }
+          const c = document.createElement('canvas');
+          c.width = width; c.height = height;
+          c.getContext('2d').drawImage(img, 0, 0, width, height);
+          const scaled = c.toDataURL('image/jpeg', 0.85);
+          if (scaled && scaled.length > 30) { PO_IMAGE = scaled; renderImagePreview(); }
+        } catch (e) { /* keep original */ }
+      };
+      img.onerror = () => { /* keep original */ };
+      img.src = reader.result;
+    } catch (e) { /* keep original */ }
   };
+  reader.onerror = () => { alert('Could not read the image file.'); };
   reader.readAsDataURL(file);
   ev.target.value = '';   // allow re-picking the same file later
 }
@@ -1044,13 +1077,13 @@ function editOrder(idx) {
   comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
   document.getElementById('po-qty').value = Number(it?.qty) || 0;
 
-  const { byIndex, sections, sizes, meta, nameMap, map, actualMap, clean } = parseBudgets(it?.description);
+  const { byIndex, sections, sizes, meta, image, nameMap, map, actualMap, clean } = parseBudgets(it);
   document.getElementById('po-desc').value = clean || '';
   document.getElementById('po-customer').value = (meta && meta.cust) || '';
   document.getElementById('po-color').value = (meta && meta.col) || '';
   document.getElementById('po-shape').value = (meta && meta.shp) || '';
   setSizes(sizes || null);   // if sizes exist, this re-links Finished Qty to Total Pairs
-  PO_IMAGE = orderImageSrc(it); renderImagePreview();
+  PO_IMAGE = image || orderImageSrc(it); renderImagePreview();
 
   // Rebuild the six sections (use saved titles if any), then place each line in its section
   renderBomSections(sections || null);
@@ -1127,10 +1160,13 @@ function submitProductionOrder() {
   // Reference: use field value, else auto = highest existing + 1
   const ref = document.getElementById('po-ref').value.trim() || nextReference();
 
-  // Description: keep user text clean; append a hidden per-line tag for round-tripping
+  // Print-only data tag (now also carries the image). Stored in the Print Data text
+  // custom field when configured (keeps Description clean); else appended to Description.
   const desc = document.getElementById('po-desc').value.trim();
-  const poxTag = encodeLineExtras(sectionTitles, extras, sizes, pmeta);
-  const fullDesc = [desc, poxTag].filter(Boolean).join(' ').trim();
+  const imageRaw = PO_IMAGE ? stripDataUrlPrefix(PO_IMAGE) : '';
+  const poxTag = encodeLineExtras(sectionTitles, extras, sizes, pmeta, imageRaw);
+  const useDataField = !!(DATA_FIELD_KEY && poxTag);
+  const fullDesc = useDataField ? (desc || null) : ([desc, poxTag].filter(Boolean).join(' ').trim() || null);
 
   const issueIso = dateForBackend(document.getElementById('po-date').value);
   const deliveryIso = dateForBackend(document.getElementById('po-delivery').value);
@@ -1139,9 +1175,16 @@ function submitProductionOrder() {
   const baseCF2 = (EDIT_ITEM && EDIT_ITEM.customFields2) ? { ...EDIT_ITEM.customFields2 } : { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null };
   baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: issueIso };
 
-  // Image custom field: set when an image is present, remove the key when cleared
+  // Store the print-only data blob (incl. image) in the Print Data text custom field
+  if (DATA_FIELD_KEY) {
+    const strs = { ...(baseCF2.strings || {}) };
+    if (poxTag) strs[DATA_FIELD_KEY] = poxTag; else delete strs[DATA_FIELD_KEY];
+    baseCF2.strings = strs;
+  }
+
+  // Also mirror into Manager's native image custom field (best-effort; harmless if ignored)
   const imgs = { ...(baseCF2.images || {}) };
-  if (PO_IMAGE) imgs[IMAGE_KEY] = stripDataUrlPrefix(PO_IMAGE); else delete imgs[IMAGE_KEY];
+  if (imageRaw) imgs[IMAGE_KEY] = imageRaw; else delete imgs[IMAGE_KEY];
   baseCF2.images = Object.keys(imgs).length ? imgs : {};
 
   // Build the order value — start from the original on edit to keep untouched fields intact
@@ -1208,7 +1251,7 @@ function submitProductionOrder() {
    material's actual backend line quantity.
 ══════════════════════════════════ */
 function buildOrderDetail(item) {
-  const { byIndex, sections, sizes, meta, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item?.description);
+  const { byIndex, sections, sizes, meta, image, map: budgetMap, actualMap, nameMap, clean: cleanDesc } = parseBudgets(item);
   const lines = Array.isArray(item?.billOfMaterials) ? item.billOfMaterials : [];
   const detail = lines.map((l, i) => {
     const key  = l?.billOfMaterials;
@@ -1229,7 +1272,7 @@ function buildOrderDetail(item) {
       remarks: e ? (e.m || '') : ''
     };
   });
-  return { detail, cleanDesc, sections, sizes, meta };
+  return { detail, cleanDesc, sections, sizes, meta, image };
 }
 
 /* List of production orders */
@@ -1331,6 +1374,8 @@ function openOrder(idx) {
     ['Delivery Date', deliveryDate(it) ? fmtDate(deliveryDate(it)) : '']
   ].map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
 
+  const imgSrc = d.image || orderImageSrc(it);
+
   const docHtml = `
     <div class="doc">
       <div class="po-headtext">
@@ -1344,7 +1389,7 @@ function openOrder(idx) {
         </div>
         <div class="po-top-right">
           <div class="po-plandate"><span>Plan Date</span><b>${planDateStr || ''}</b></div>
-          <div class="po-image-box">${orderImageSrc(it) ? `<img src="${orderImageSrc(it)}" alt="">` : ''}</div>
+          <div class="po-image-box">${imgSrc ? `<img src="${imgSrc}" alt="">` : ''}</div>
           ${sizeTablePrintHtml(d.sizes)}
         </div>
       </div>
@@ -1370,7 +1415,9 @@ function openOrder(idx) {
 
   // If the batch item carried no image (batch can omit image bytes), fetch the single
   // order and inject the image into both the on-screen and print copies.
-  if (!orderImageSrc(it)) {
+  // If we still have no image anywhere, try fetching the single order (legacy orders
+  // whose image was only in Manager's native field, which the batch may omit).
+  if (!imgSrc) {
     fetchOrderImageSrc(it, row?.key).then(src => {
       if (!src) return;
       const tag = `<img src="${src}" alt="">`;
