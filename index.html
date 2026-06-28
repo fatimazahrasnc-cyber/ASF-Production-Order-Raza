@@ -844,6 +844,30 @@ function orderImageSrc(it) {
   if (!src && cf1 && typeof cf1 === 'object') src = imgValueToSrc(cf1[IMAGE_KEY]) || imgValueToSrc(Object.values(cf1)[0]);
   return src;
 }
+/* Strip a data URL prefix so we store raw base64 (what Manager's image field expects) */
+function stripDataUrlPrefix(d) {
+  const s = String(d || '');
+  const i = s.indexOf('base64,');
+  return i >= 0 ? s.slice(i + 7) : s;
+}
+/* The batch endpoint can omit image bytes (returns images:{}). When we have no image
+   from the batch item, fetch the single production order to retrieve it. */
+async function fetchOrderImageSrc(it, key) {
+  const id = it?.id || it?.key || key;
+  if (!id) return '';
+  const paths = [
+    '/api4/production-order?id=' + encodeURIComponent(id),
+    '/api4/production-order/' + encodeURIComponent(id)
+  ];
+  for (const p of paths) {
+    try {
+      const r = await postMessageWithResponse({ type: 'api-request', method: 'GET', path: p });
+      const src = orderImageSrc(r?.value || {}) || orderImageSrc(r?.item || {}) || orderImageSrc(r || {});
+      if (src) return src;
+    } catch (e) { /* try next path */ }
+  }
+  return '';
+}
 /* Show current PO_IMAGE in the form drop zone */
 function renderImagePreview() {
   const drop = document.getElementById('po-image-drop');
@@ -1117,8 +1141,8 @@ function submitProductionOrder() {
 
   // Image custom field: set when an image is present, remove the key when cleared
   const imgs = { ...(baseCF2.images || {}) };
-  if (PO_IMAGE) imgs[IMAGE_KEY] = PO_IMAGE; else delete imgs[IMAGE_KEY];
-  baseCF2.images = Object.keys(imgs).length ? imgs : null;
+  if (PO_IMAGE) imgs[IMAGE_KEY] = stripDataUrlPrefix(PO_IMAGE); else delete imgs[IMAGE_KEY];
+  baseCF2.images = Object.keys(imgs).length ? imgs : {};
 
   // Build the order value — start from the original on edit to keep untouched fields intact
   const base = EDIT_ITEM ? { ...EDIT_ITEM } : {};
@@ -1343,6 +1367,16 @@ function openOrder(idx) {
     </div>`;
   document.getElementById('print-doc').innerHTML = docHtml;
   document.getElementById('po-detail').scrollIntoView({ behavior:'smooth' });
+
+  // If the batch item carried no image (batch can omit image bytes), fetch the single
+  // order and inject the image into both the on-screen and print copies.
+  if (!orderImageSrc(it)) {
+    fetchOrderImageSrc(it, row?.key).then(src => {
+      if (!src) return;
+      const tag = `<img src="${src}" alt="">`;
+      document.querySelectorAll('#po-detail .po-image-box, #print-doc .po-image-box').forEach(b => { b.innerHTML = tag; });
+    });
+  }
 }
 
 /* Trigger browser print dialog → user picks "Save as PDF" */
