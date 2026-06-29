@@ -474,6 +474,7 @@ function issueDate(it) { return it?.customFields2?.dates?.[ISSUE_DATE_KEY] || it
    human-readable "| Budgeted: Name: budget N; …" format for existing orders.
    None of this affects a material's actual backend quantity. */
 const POX_RE    = /\u27E6POX:([^\u27E7]*)\u27E7/;           // ⟦POX:base64⟧ (per-line array)
+const IMG_RE    = /\u27E6IMG:([^\u27E7]*)\u27E7/;           // ⟦IMG:rawBase64⟧ (image, single-encoded)
 const BUD_RE    = /\u27E6BUD:([^\u27E7]*)\u27E7/;            // ⟦BUD:key=qty|key=qty⟧
 const AQI_RE    = /\u27E6AQI:([^\u27E7]*)\u27E7/;            // ⟦AQI:key=qty|key=qty⟧
 const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name: budget N; …
@@ -481,16 +482,14 @@ const LEGACY_RE = /\s*\|?\s*Budgeted:\s*([^\u27E6]*)$/i;     // | Budgeted: Name
 function b64encodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
 function b64decodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
 
-/* v2 format: { v:2, sec?, sz?, meta?, ln:[{ s, r?, i?, d?, c?, m? }] }, only including
-   non-default / non-empty parts to keep the stored blob small. Older orders may carry a
-   bare array of {r,i,d,c,m} (single-section); still readable. */
-function encodeLineExtras(sectionTitles, lines, sizes, pmeta, imageRaw) {
+/* v2 format: { v:2, sec?, sz?, meta?, ln:[{ s, i?, d?, c?, tc?, rate?, m? }] }, only including
+   non-default / non-empty parts. The image is NOT here — it lives in its own ⟦IMG:…⟧ tag. */
+function encodeLineExtras(sectionTitles, lines, sizes, pmeta) {
   const hasAny = lines.some(l => (Number(l.i)||0) || (l.d||'').trim() || (l.c||'').toString().trim() || (l.tc||'').toString().trim() || (l.rate||'').toString().trim() || (l.m||'').trim());
   const hasCustomTitles = (sectionTitles || []).some((t, i) => (t||'').trim() !== (DEFAULT_SECTIONS[i] || '').trim());
   const hasSizes = sizes && Object.keys(sizes).length > 0;
   const hasMeta = pmeta && (pmeta.cust || pmeta.col || pmeta.shp);
-  const hasImage = !!imageRaw;
-  if (!hasAny && !hasCustomTitles && !hasSizes && !hasMeta && !hasImage) return '';
+  if (!hasAny && !hasCustomTitles && !hasSizes && !hasMeta) return '';
   // Trim each line to only its populated fields (section index always kept for grouping)
   const ln = lines.map(l => {
     const o = { s: l.s || 0 };
@@ -506,9 +505,13 @@ function encodeLineExtras(sectionTitles, lines, sizes, pmeta, imageRaw) {
   if (hasCustomTitles) obj.sec = sectionTitles;
   if (hasSizes) obj.sz = sizes;
   if (hasMeta) obj.meta = pmeta;
-  if (hasImage) obj.img = imageRaw;   // raw base64 (no data: prefix)
   try { return `\u27E6POX:${b64encodeUnicode(JSON.stringify(obj))}\u27E7`; }
   catch (e) { return ''; }
+}
+/* Image stored as its own single-encoded tag so a large image can never corrupt the
+   structured data and isn't needlessly double-base64'd. `raw` = base64 (no data: prefix). */
+function encodeImageTag(raw) {
+  return raw ? `\u27E6IMG:${raw}\u27E7` : '';
 }
 function encodeTag(prefix, map) {
   const parts = Object.entries(map).filter(([k,v]) => k && Number(v) > 0).map(([k,v]) => `${k}=${v}`);
@@ -544,11 +547,18 @@ function parseBudgets(itemOrDesc) {
         out.sections = Array.isArray(obj.sec) ? obj.sec : null;
         out.sizes = (obj.sz && typeof obj.sz === 'object') ? obj.sz : null;
         out.meta = (obj.meta && typeof obj.meta === 'object') ? obj.meta : null;
-        out.image = obj.img ? imgValueToSrc(obj.img) : null;
+        out.image = obj.img ? imgValueToSrc(obj.img) : null;   // legacy: image once lived inside POX
       }
     } catch (e) {}
     // Strip the tag from the description only if that's where it was
     if (!fieldData) out.clean = out.clean.replace(POX_RE, '').trim();
+  }
+
+  // Standalone image tag ⟦IMG:rawBase64⟧ (current format) — takes priority over legacy
+  const im = poxSource.match(IMG_RE);
+  if (im) {
+    out.image = imgValueToSrc(im[1]) || out.image;
+    if (!fieldData) out.clean = out.clean.replace(IMG_RE, '').trim();
   }
 
   // Older formats: ⟦BUD:uuid=qty|…⟧ and ⟦AQI:uuid=qty|…⟧ (keyed by material UUID)
@@ -927,7 +937,7 @@ function onImagePicked(ev) {
       const img = new Image();
       img.onload = () => {
         try {
-          const maxDim = 800;
+          const maxDim = 200;
           let { width, height } = img;
           if (width > maxDim || height > maxDim) {
             const k = Math.min(maxDim / width, maxDim / height);
@@ -1169,13 +1179,15 @@ function submitProductionOrder() {
   // Reference: use field value, else auto = highest existing + 1
   const ref = document.getElementById('po-ref').value.trim() || nextReference();
 
-  // Print-only data tag (now also carries the image). Stored in the Print Data text
-  // custom field when configured (keeps Description clean); else appended to Description.
+  // Structured data tag (no image) + standalone image tag. Both go in the Print Data text
+  // custom field when configured (Description stays clean); else appended to Description.
   const desc = document.getElementById('po-desc').value.trim();
   const imageRaw = PO_IMAGE ? stripDataUrlPrefix(PO_IMAGE) : '';
-  const poxTag = encodeLineExtras(sectionTitles, extras, sizes, pmeta, imageRaw);
-  const useDataField = !!(DATA_FIELD_KEY && poxTag);
-  const fullDesc = useDataField ? (desc || null) : ([desc, poxTag].filter(Boolean).join(' ').trim() || null);
+  const poxTag = encodeLineExtras(sectionTitles, extras, sizes, pmeta);
+  const imgTag = encodeImageTag(imageRaw);
+  const dataBlob = [poxTag, imgTag].filter(Boolean).join('');   // POX first, IMG last
+  const useDataField = !!(DATA_FIELD_KEY && dataBlob);
+  const fullDesc = useDataField ? (desc || null) : ([desc, dataBlob].filter(Boolean).join(' ').trim() || null);
 
   const issueIso = dateForBackend(document.getElementById('po-date').value);
   const deliveryIso = dateForBackend(document.getElementById('po-delivery').value);
@@ -1184,17 +1196,12 @@ function submitProductionOrder() {
   const baseCF2 = (EDIT_ITEM && EDIT_ITEM.customFields2) ? { ...EDIT_ITEM.customFields2 } : { strings:null, decimals:null, dates:null, booleans:null, stringArrays:null, images:null };
   baseCF2.dates = { ...(baseCF2.dates || {}), [ISSUE_DATE_KEY]: issueIso };
 
-  // Store the print-only data blob (incl. image) in the Print Data text custom field
+  // Store the data + image blob in the Print Data text custom field
   if (DATA_FIELD_KEY) {
     const strs = { ...(baseCF2.strings || {}) };
-    if (poxTag) strs[DATA_FIELD_KEY] = poxTag; else delete strs[DATA_FIELD_KEY];
+    if (dataBlob) strs[DATA_FIELD_KEY] = dataBlob; else delete strs[DATA_FIELD_KEY];
     baseCF2.strings = strs;
   }
-
-  // Also mirror into Manager's native image custom field (best-effort; harmless if ignored)
-  const imgs = { ...(baseCF2.images || {}) };
-  if (imageRaw) imgs[IMAGE_KEY] = imageRaw; else delete imgs[IMAGE_KEY];
-  baseCF2.images = Object.keys(imgs).length ? imgs : {};
 
   // Build the order value — start from the original on edit to keep untouched fields intact
   const base = EDIT_ITEM ? { ...EDIT_ITEM } : {};
