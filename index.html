@@ -965,12 +965,12 @@ function sectionColsHtml() {
   return `
     <thead>
       <tr>
-        <th style="width:25%">Components / Description</th>
+        <th style="width:18%">Components / Description</th>
         <th style="width:23%">Material Reference</th>
         <th style="width:9%">Unit</th>
         <th style="width:16%" class="num">Consumption</th>
         <th style="width:16%" class="num">Req</th>
-        <th style="width:11%" class="num">Issued</th>
+        <th style="width:14%" class="num">Issued</th>
         <th style="width:4%"></th>
       </tr>
     </thead>`;
@@ -1213,6 +1213,62 @@ function editOrder(idx) {
 }
 
 /* ══════════════════════════════════
+   CLONE — copy an existing order into the form as a NEW order.
+   Unlike editOrder, this does NOT set EDIT_KEY/EDIT_ITEM, so
+   submitting POSTs a fresh record instead of overwriting the source.
+══════════════════════════════════ */
+function cloneOrder(idx) {
+  const row = PRODUCTION[idx];
+  const it  = row?.item || {};
+
+  exitEditMode();                       // ensure create mode (clears any EDIT_KEY/EDIT_ITEM)
+  switchTab('create');
+  document.getElementById('edit-banner').innerHTML =
+    `<div class="ok-box">Cloning order #${esc(it?.reference || it?.text || '')} as a new production order. A new batch number has been assigned — review the details and create it. <button class="btn-secondary" style="padding:4px 10px;margin-left:8px" onclick="resetCreateForm()">Cancel clone</button></div>`;
+
+  // Dates: default to today for the new order (don't carry the source's dates)
+  setToday();
+
+  // Fresh batch number for the clone (highest existing + 1)
+  document.getElementById('po-ref').value = nextReference();
+
+  comboSetValue(document.getElementById('po-finished'), it?.finishedInventoryItem || '');
+  document.getElementById('po-qty').value = Number(it?.qty) || 0;
+
+  const { byIndex, sections, sizes, meta, image, actualMap } = parseBudgets(it);
+  document.getElementById('po-desc').value = '';          // PO# is order-specific — start blank
+  document.getElementById('po-customer').value = (meta && meta.cust) || '';
+  document.getElementById('po-color').value = (meta && meta.col) || '';
+  document.getElementById('po-shape').value = (meta && meta.shp) || '';
+  setSizes(sizes || null);
+  PO_IMAGE = image || orderImageSrc(it); renderImagePreview();
+
+  // Rebuild sections and lines, but with actualQty = 0 (new order — nothing preserved)
+  renderBomSections(sections || null);
+  const lines = Array.isArray(it?.billOfMaterials) ? it.billOfMaterials : [];
+  lines.forEach((l, i) => {
+    const key = l?.billOfMaterials || '';
+    const e = (byIndex && byIndex[i]) ? byIndex[i] : null;
+    let s = (e && Number.isInteger(e.s)) ? e.s : 0;
+    s = Math.max(0, Math.min(SECTION_COUNT - 1, s));
+    addBomLine(s, {
+      key,
+      description: e ? (e.d || '') : '',
+      composition: e ? (e.c || '') : '',
+      formula: e ? (e.cf || '') : '',
+      required: e ? (e.r != null ? e.r : '') : '',
+      reqFormula: e ? (e.rf || '') : '',
+      issued: e ? (Number(e.i) || 0) : 0,
+      actualQty: 0
+    });
+  });
+
+  recalcTotalConsume();
+  document.getElementById('create-msg').innerHTML = '';
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+
+/* ══════════════════════════════════
    CREATE / UPDATE — build payload & POST or PUT.
    "Budgeted Qty" is print-only: stored in the description
    tag, never written as a material's actual line qty.
@@ -1326,21 +1382,21 @@ function submitProductionOrder() {
   })
     .then(resp => {
       const savedKey = EDIT_KEY || resp?.key || resp?.id || (typeof resp === 'string' ? resp : null);
+      let okMsg;
       if (editing) {
         // Update local copy
         const i = PRODUCTION.findIndex(r => (r?.key || r?.item?.key) === EDIT_KEY);
         if (i >= 0) PRODUCTION[i] = { ...PRODUCTION[i], item: { ...value, key: EDIT_KEY, text: ref } };
-        msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} updated.</div>`;
-        exitEditMode();
-        btn.textContent = 'Create Production Order'; btn.disabled = false;
-        document.getElementById('po-ref').value = nextReference();
+        okMsg = `<div class="ok-box">✓ Production order #${esc(ref)} updated. The form has been reset to prevent accidental duplicates.</div>`;
       } else {
         PRODUCTION.push({ key: savedKey, item: { ...value, key: savedKey, text: ref } });
-        msg.innerHTML = `<div class="ok-box">✓ Production order #${esc(ref)} created${savedKey ? ' (key: ' + esc(savedKey) + ')' : ''}.</div>`;
-        btn.textContent = 'Create Production Order'; btn.disabled = false;
-        document.getElementById('po-ref').value = nextReference();
+        okMsg = `<div class="ok-box">✓ Production order #${esc(ref)} created${savedKey ? ' (key: ' + esc(savedKey) + ')' : ''}. The form has been reset to prevent accidental duplicates.</div>`;
       }
       renderPoList();
+      resetCreateForm();                 // clear the whole form so a stray second click can't re-post
+      btn.textContent = 'Create Production Order';
+      btn.disabled = false;
+      msg.innerHTML = okMsg;             // set AFTER reset, since resetCreateForm() clears #create-msg
     })
     .catch(err => {
       msg.innerHTML = `<div class="err-box">⚠ Could not ${editing ? 'update' : 'create'} order: ${esc(err.message)}</div>`;
@@ -1444,12 +1500,12 @@ function openOrder(idx) {
   // Department material tables (sections 0..3). First four omitted when they have no lines.
   const deptCols = `
     <thead><tr>
-      <th style="width:30%">Components / Description</th>
+      <th style="width:24%">Components / Description</th>
       <th style="width:26%">Material Reffrence</th>
       <th style="width:10%">Unit</th>
       <th style="width:13%">Consumption</th>
       <th style="width:13%">Req</th>
-      <th style="width:8%">Issued</th>
+      <th style="width:14%">Issued</th>
     </tr></thead>`;
   let deptHtml = '';
   for (let i = 0; i < 4; i++) {
@@ -1526,6 +1582,7 @@ function openOrder(idx) {
         <div style="display:flex;gap:10px">
           <button class="btn-primary" onclick="printOrder()">🖨 Print / Save as PDF</button>
           <button class="btn-secondary" onclick="editOrder(${idx})">✎ Edit</button>
+          <button class="btn-secondary" onclick="cloneOrder(${idx})">⧉ Clone</button>
           <button class="btn-secondary" onclick="document.getElementById('po-detail').innerHTML=''">Close</button>
         </div>
       </div>
